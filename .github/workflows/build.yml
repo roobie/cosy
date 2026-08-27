@@ -1,0 +1,79 @@
+# Builds the package the README tells a visitor to build, then installs it exactly the way
+# the README tells them to install it, on a machine that has never seen this project.
+#
+# Two things this catches that a local build cannot:
+#
+#   1. AN INCOMPLETE PUBLISH. This repository is a mirror produced by an allowlist. A source
+#      file that exists upstream but was never added to that allowlist compiles fine there
+#      and fails here — the runner has only what was published, which is the whole point.
+#
+#   2. VERSION DRIFT BETWEEN THE TOOL AND THE PLUGIN. `doctor`'s third check compares the
+#      running binary's version core against plugins/cosy/.claude-plugin/plugin.json and
+#      exits 5 when they disagree. Upstream, that lockstep is enforced by a release script
+#      only when someone runs it; here it is enforced on every push.
+#
+# The SDK matrix is not padding. The tool targets net8.0 with RollForward=LatestMajor, and
+# MSBuildLocator resolves the SDK matching the HOST RUNTIME major — so the runtime it lands
+# on decides which solutions it can evaluate. A runner carrying exactly one SDK is the only
+# honest test of that claim; a dev machine with several installed cannot fail it.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: this workflow reads the repo and publishes nothing.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # global.json asks for 8.0.100 with rollForward: latestMajor, so both satisfy it.
+        dotnet: ['8.0.x', '10.0.x']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+
+      - name: Build
+        run: dotnet build Cosy.sln -c Release
+
+      - name: Pack
+        run: dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release
+
+      # The README's install path, run verbatim in a directory that is not this repository —
+      # a local tool manifest resolved by walking up from the current directory is precisely
+      # what `dotnet tool run` does for a consumer, and doing it inside the checkout would
+      # let the repo's own layout paper over a failure.
+      - name: Install as a local tool, the way a consumer does
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          dotnet new tool-manifest
+          dotnet tool install --add-source "$GITHUB_WORKSPACE/artifacts/nupkg" Cosy.Mcp
+          # Required on SDK 8, a no-op on SDK 10, which auto-restores.
+          dotnet tool restore
+
+      # Exit code is doctor's own: 3 manifest, 4 tool_run, 5 version mismatch. Failing the
+      # job on it is the point — a green build that ships a stale or mismatched tool is the
+      # failure mode this repo has actually hit.
+      - name: doctor
+        run: |
+          cd "$RUNNER_TEMP/consumer"
+          dotnet tool run cosy-mcp doctor --plugin-root "$GITHUB_WORKSPACE/plugins/cosy"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg-net${{ matrix.dotnet }}
+          path: artifacts/nupkg/*.nupkg
+          if-no-files-found: error
