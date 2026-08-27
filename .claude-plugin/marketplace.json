@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cosy-mcp",
+  "description": "Cosy — Roslyn-over-MCP substrate for C#, with a DotnetCoder subagent that routes C# edits and search through the semantic MCP verbs.",
+  "owner": {
+    "name": "BR",
+    "email": "bjorn.roberg@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "cosy",
+      "source": "./plugins/cosy",
+      "description": "Roslyn-over-MCP substrate for C#: semantic navigation plus verified, snapshot-guarded edits, with a DotnetCoder subagent whose tool list is the Cosy verbs plus Read."
+    }
+  ]
+}

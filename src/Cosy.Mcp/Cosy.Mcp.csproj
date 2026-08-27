@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Cosy.Mcp</RootNamespace>
+    <AssemblyName>Cosy.Mcp</AssemblyName>
+    <!-- Run on .NET 8 or any later major (ADR-0011 §Runtime roll-forward). Load-bearing
+         beyond mere installability: MSBuildLocator picks the SDK matching the HOST RUNTIME
+         major, so the runtime we land on decides which solutions we can evaluate. Measured
+         — the same binary, forced onto the .NET 10 runtime via `dotnet exec` with an
+         explicit fx-version, resolved SDK 10.0.202 instead of 8.0.420. Without this, a
+         machine with only .NET 10 cannot start the tool at all. -->
+    <RollForward>LatestMajor</RollForward>
+  </PropertyGroup>
+
+  <!-- Packaging (ADR-0011). Framework-dependent .NET tool: `dotnet tool install` replaces
+       the earlier hand-copy of build output to a fixed directory, and .mcp.json becomes
+       `"command": "cosy-mcp"` with no absolute path.
+       NOT self-contained — the server resolves MSBuild from the
+       host's SDK at runtime (see the Microsoft.Build.* exclusions below), so bundling a
+       runtime would remove neither that dependency nor the need for the user's own
+       targeting packs and restored packages. -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>cosy-mcp</ToolCommandName>
+    <PackageId>Cosy.Mcp</PackageId>
+    <Version>0.1.1</Version>
+    <Description>Roslyn-over-MCP substrate for C#: semantic navigation plus verified, snapshot-guarded edits. Requires a .NET SDK on the host.</Description>
+    <Authors>BR</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>$(MSBuildThisFileDirectory)../../artifacts/nupkg</PackageOutputPath>
+    <!-- Pre-1.0: the tool contract (ADR-0004) is still allowed to break shape between
+         versions. Consumers pin an exact version. -->
+    <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" />
+    <!-- Ships Microsoft.CodeAnalysis.Features + .CSharp.Features DLLs to bin/ so
+         ExtractMethodInvoker can reflection-load ExtractMethodCodeRefactoringProvider
+         and MEF's LoadNearbyAssemblies discovers CSharpExtractMethodService (10-01).
+         No ExcludeAssets/PrivateAssets — the DLLs must ship to output. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" />
+    <!-- Unified-diff rendering for read_snapshot (ADR-0010). -->
+    <PackageReference Include="DiffPlex" />
+    <!-- Single glob dialect shared by find_text (pathGlob) and find_files (D-07). -->
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" />
+    <PackageReference Include="Microsoft.Build.Locator" />
+    <!-- Prevent MSBuild assemblies from landing in the output directory.
+         MSBuildLocator resolves them at runtime from the SDK; having them
+         in the output dir causes assembly version conflicts (MSBL001). -->
+    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Tasks.Core" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

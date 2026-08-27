@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cosy": {
+      "command": "dotnet",
+      "args": ["tool", "run", "cosy-mcp"],
+      "type": "stdio"
+    }
+  }
+}

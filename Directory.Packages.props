@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="ModelContextProtocol" Version="1.2.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.Build.Locator" Version="1.11.2" />
+    <!-- Unified-diff rendering for read_snapshot (ADR-0010). MIT-licensed, no transitive deps. -->
+    <PackageVersion Include="DiffPlex" Version="1.7.2" />
+    <!-- MSBuild assemblies: version-pinned for CPM; ExcludeAssets/PrivateAssets set per-project -->
+    <PackageVersion Include="Microsoft.Build" Version="17.11.48" />
+    <PackageVersion Include="Microsoft.Build.Framework" Version="17.11.48" />
+    <PackageVersion Include="Microsoft.Build.Tasks.Core" Version="17.11.48" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <PackageVersion Include="Shouldly" Version="4.3.0" />
+    <!-- Single glob dialect shared by find_text (pathGlob) and find_files (D-07). Direct pin
+         rather than relying on the transitive resolution a hosting-package bump could float or
+         drop (10.1-RESEARCH.md OQ-2); already Microsoft-authored and in the existing graph. -->
+    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="8.0.0" />
+  </ItemGroup>
+</Project>
