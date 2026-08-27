@@ -1,0 +1,91 @@
+# Publishes Cosy.Mcp to nuget.org on a version tag, using Trusted Publishing.
+#
+# NO API KEY IS STORED ANYWHERE. GitHub mints a short-lived OIDC token for this job;
+# NuGet/login exchanges it at nuget.org's token endpoint for an API key valid one hour,
+# and nuget.org accepts the exchange only if the token's claims match a policy registered
+# against this owner, this repository and THIS FILE'S NAME. A stolen repository secret is
+# the documented compromise path for package publishing, and there is no secret here to
+# steal — the only stored value is a username.
+#
+# THE POLICY IS BOUND TO THE FILENAME `release.yml`. Renaming or splitting this file
+# breaks publishing until the policy on nuget.org is updated to match. That coupling is
+# invisible from the code, which is why it is stated here.
+#
+# One-time setup on nuget.org (Account → Trusted Publishing):
+#   Repository Owner: roobie
+#   Repository:       cosy
+#   Workflow File:    release.yml        (file name only, no .github/workflows/ prefix)
+#   Environment:      leave empty        (this workflow declares none)
+#   Scope:            must permit publishing a NEW package for the first release
+# Then add a repository variable NUGET_USER holding the nuget.org profile name — the
+# username, never the email address.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write      # lets this job request an OIDC token; nothing else needs it
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # The tag and the csproj are two independent claims about what is being released,
+      # and this repository is a synced mirror — a tag pushed before a sync would publish
+      # the PREVIOUS version under the new tag's name. Read the version MSBuild actually
+      # evaluates rather than regexing the file, and refuse to continue on a mismatch.
+      # ADR-0011's revision records what an unnoticed version mismatch already cost here.
+      - name: Tag must match the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(dotnet msbuild src/Cosy.Mcp/Cosy.Mcp.csproj -getProperty:Version -nologo)
+          version="${version//[$'\t\r\n ']/}"
+          echo "tag=$tag csproj=$version"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match csproj Version $version" >&2
+            exit 1
+          fi
+
+      - name: Pack
+        run: dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release
+
+      # Publish nothing that has not been installed once. A package on nuget.org cannot be
+      # deleted, only unlisted, so the cheap check runs before the irreversible step —
+      # same reason the mirror's own publish script scans the files it wrote rather than
+      # the files it meant to write.
+      - name: Install the packed tool and run doctor
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          dotnet new tool-manifest
+          dotnet tool install --add-source "$GITHUB_WORKSPACE/artifacts/nupkg" Cosy.Mcp
+          dotnet tool restore
+          dotnet tool run cosy-mcp doctor --plugin-root "$GITHUB_WORKSPACE/plugins/cosy"
+
+      # Immediately before the push: the minted key expires in an hour, so requesting it
+      # early is how a long job ends with an expired credential.
+      - name: NuGet login (OIDC → short-lived key)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      # No --skip-duplicate. The guard above already proves the tag and the package agree,
+      # so a duplicate means this exact version was published before — which is a mistake
+      # worth failing on, not one worth swallowing.
+      - name: Push
+        run: |
+          dotnet nuget push artifacts/nupkg/*.nupkg \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json
