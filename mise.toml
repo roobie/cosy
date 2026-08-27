@@ -1,21 +1,7 @@
+# Toolchain pin only. The build and install recipes live in the `justfile` — one runner,
+# not two saying the same thing in different syntax. `mise` here is for getting a matching
+# SDK; `just` is for doing something with it. Neither is required: the README spells out
+# the plain dotnet commands, and `global.json` already asks for "SDK 8 or newer".
 [tools]
 dotnet = "10.0.202"
 node = "22"
-
-[tasks.pack]
-description = "Build the Cosy.Mcp NuGet package into artifacts/nupkg — the install path, since there is no public feed"
-run = "dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release"
-
-[tasks.install-tool]
-description = "Install the newest locally packed tool globally as `cosy-mcp` — for direct MCP-client use. The Claude Code plugin path needs a LOCAL per-repo manifest instead; see plugins/cosy/README.md"
-# No pinned --version: it picks the highest in artifacts/nupkg, so it cannot go stale
-# against a fresh `pack` the way a hardcoded version would.
-run = "dotnet tool install --global --add-source artifacts/nupkg Cosy.Mcp"
-
-[tasks.update-tool]
-description = "Update the globally installed `cosy-mcp` to the newest local pack — global install only; the plugin path needs a local manifest"
-run = "dotnet tool update --global --add-source artifacts/nupkg Cosy.Mcp"
-
-[tasks.uninstall-tool]
-description = "Remove the globally installed `cosy-mcp` tool — does not affect a consumer repo's local tool manifest"
-run = "dotnet tool uninstall --global Cosy.Mcp"

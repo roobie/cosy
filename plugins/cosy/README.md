@@ -30,16 +30,32 @@ repository** — the C# repo you want Cosy to work in.
    dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release     # -> artifacts/nupkg/
    ```
 
+   **Steps 2–4 collapse into one** if you have [`just`](https://github.com/casey/just).
+   From this clone, naming your own repo, and it runs `doctor` at the end:
+
+   ```sh
+   just install-into ~/work/my-api
+   ```
+
 2. `dotnet new tool-manifest` (once, in the consumer repo). Creates the local tool
    manifest that `dotnet tool run` resolves by walking up from the current directory.
    Note: this can land at the directory root as `dotnet-tools.json` rather than under
    `.config/`, depending on the SDK version that runs it — either location works, because
    resolution walks up from wherever the file is.
 
-3. `dotnet tool install --add-source <path-to-the-clone>/artifacts/nupkg Cosy.Mcp` —
-   installs the server as a local tool declared in that manifest. The `--add-source`
-   argument is required: with no public feed, a bare `dotnet tool install Cosy.Mcp` cannot
+3. `dotnet tool update --add-source /abs/path/to/cosy/artifacts/nupkg Cosy.Mcp` —
+   installs the server as a local tool declared in that manifest.
+
+   Two things about that path. It must point at the **directory containing the `.nupkg`**,
+   which is `artifacts/nupkg` inside the clone — not the clone's root, which yields
+   `cosy.mcp is not found in NuGet feeds`. And it must be **absolute**, because you are
+   running this from your repository, not from the clone. The `--add-source` argument
+   itself is required: with no public feed, a bare `dotnet tool install Cosy.Mcp` cannot
    resolve the package.
+
+   `update` rather than `install` because `install` errors when the tool is already
+   present; `update` installs when absent and re-pins when present, so the same command
+   works on a fresh machine and after a `git pull`.
 
 4. **On a .NET SDK older than 10 only:** `dotnet tool restore`, once, after cloning the
    consumer repo on a fresh machine. `dotnet tool run` auto-restores on SDK 10 and does

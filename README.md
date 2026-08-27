@@ -33,14 +33,29 @@ installed is the most common cause of a failed load.
 ```sh
 git clone https://github.com/roobie/cosy.git
 cd cosy
-dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release      # -> artifacts/nupkg/
 ```
 
-Then install it as a tool. For plain MCP-client use, global is fine:
+With [`just`](https://github.com/casey/just), one command builds and installs:
 
 ```sh
-dotnet tool install --global --add-source ./artifacts/nupkg Cosy.Mcp
+just install-global
 ```
+
+Without it, the same thing in two commands. For plain MCP-client use, global is fine:
+
+```sh
+dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release
+dotnet tool update --global --add-source ./artifacts/nupkg Cosy.Mcp
+```
+
+> **`--add-source` takes the folder holding the `.nupkg`, not the repository root.** That
+> is `./artifacts/nupkg`, and NuGet does not search below whatever you name — pointing it
+> at the clone gets you `cosy.mcp is not found in NuGet feeds`. The directory does not
+> exist until `dotnet pack` has run, since it is gitignored build output.
+>
+> `update` rather than `install` is deliberate: `install` fails when the tool is already
+> present, so it cannot be re-run after a `git pull`. `update` installs when absent and
+> re-pins when present.
 
 Register it with your MCP client — for most clients, in `.mcp.json`:
 
@@ -65,11 +80,23 @@ The plugin launches the server as `dotnet tool run cosy-mcp`, which resolves a *
 tool manifest in the repository you are working in, not the global install above. Run
 these from the C# repository you want Cosy to work in:
 
+From *this* clone, one command does all of it — including a `doctor` check at the end:
+
+```sh
+just install-into ~/work/my-api        # your C# repo, not this one
+```
+
+Or by hand, run from the consumer repository:
+
 ```sh
 dotnet new tool-manifest                                          # once per consumer repo
-dotnet tool install --add-source <path-to-this-clone>/artifacts/nupkg Cosy.Mcp
+dotnet tool update --add-source /abs/path/to/cosy/artifacts/nupkg Cosy.Mcp
 dotnet tool restore                                               # SDK 8 only; SDK 10 auto-restores
 ```
+
+The `--add-source` argument must be an **absolute path ending in `/artifacts/nupkg`**, since
+you are no longer standing in this clone. It is the folder that holds the `.nupkg` — naming
+the clone's root instead is the common miss.
 
 Then, in Claude Code:
 
