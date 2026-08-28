@@ -67,12 +67,27 @@ install-into dir: pack
     # PowerShell translation of this recipe is not shipped because it could not be tested
     # here, and an untested install path is worse than a documented manual one.
     #
+    # A stock Windows machine can have a `bash` on PATH that resolves to the WSL launcher
+    # stub at C:\Windows\System32\bash.exe rather than Git for Windows' bash — that stub
+    # fails or behaves differently here, and lacks the `cygpath` Git bash carries. If this
+    # recipe can't find a working bash, prepend Git's own bin dir (typically
+    # `C:\Program Files\Git\usr\bin`) to PATH so its bash and cygpath resolve first.
+    #
     # DIR is your own C# repository, not this one:  just install-into ~/work/my-api
     #
     # The plugin launches the server as `dotnet tool run cosy-mcp`, which resolves a tool
     # manifest by walking up from the directory it runs in — hence a per-consumer-repo
     # install rather than the global one above.
-    cd "{{dir}}"
+    #
+    # Strip a trailing backslash before it ever reaches a quoted string below: just
+    # substitutes {{dir}} verbatim into this script, so a Windows-style path pasted with
+    # its trailing `\` (e.g. `C:\work\my-api\`) produces `cd "C:\work\my-api\"` — inside
+    # bash double quotes, `\"` is an escaped literal quote, not a closing one, so the
+    # string never closes and bash fails with "unexpected EOF while looking for matching
+    # `"'" instead of running the recipe.
+    dir="{{dir}}"
+    dir="${dir%\\}"
+    cd "$dir"
     # The manifest lands at .config/dotnet-tools.json on SDK 8 and at the directory root on
     # SDK 10. Either is resolved the same way, so check both before creating a second one.
     if [ ! -f dotnet-tools.json ] && [ ! -f .config/dotnet-tools.json ]; then
