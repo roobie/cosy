@@ -60,6 +60,13 @@ builder.Services.AddSingleton(sp => new TraceSink(tracePath, sp.GetService<ILogg
 //
 //    AddCallToolFilter wraps every tools/call dispatch with tracing (ADR-0007 §2,
 //    TEL-03). Resolves sink via context.Services; one record emitted per call.
+//
+//    The emit is in a catch, NOT only on the return path. Registration-time coverage
+//    (every tool goes through the filter) is not the same as execution-time coverage:
+//    a handler that throws propagates straight through an unguarded `await next(...)`
+//    and the record is never written. That made the trace a success-only log, blind to
+//    exactly the crash and cancellation population it would be consulted about
+//    (ADR-0007 §2.7, amended 2026-09-03).
 builder.Services
     .AddMcpServer(options => options.ServerInstructions = ServerInstructionsText.Build(tracePath))
     .WithStdioServerTransport()
@@ -69,18 +76,13 @@ builder.Services
         var sink = context.Services?.GetService<TraceSink>();
         if (sink is null) return await next(context, ct);
 
-        var sw = Stopwatch.StartNew();
-        var ts = DateTimeOffset.UtcNow;
         var toolName = context.Params?.Name ?? "(unknown)";
         // SDK exposes Arguments as IDictionary<string, JsonElement>?; Emit accepts
         // the same type to avoid an unnecessary copy on a hot path. Sink does not mutate.
         var args = context.Params?.Arguments;
 
-        var result = await next(context, ct);
-
-        sw.Stop();
-        sink.Emit(toolName, ts, sw.ElapsedMilliseconds, result, args);
-        return result;
+        // Body lives in TraceDispatch so the throw path is unit-testable — see that type.
+        return await TraceDispatch.InvokeAsync(sink, toolName, args, () => next(context, ct));
     }));
 
 await builder.Build().RunAsync();

@@ -88,6 +88,24 @@ Then confirm the bump actually landed with `dotnet tool run cosy-mcp doctor` —
 which is exactly the version-skew state a `git pull` without a matching update leaves you
 in.
 
+**Then restart Claude Code.** `doctor` inspects files on disk; it cannot see that the MCP
+server process launched at session start is still executing the *previous* package. Until
+you reconnect, the manifest reads new, `doctor` passes, and every tool call is still
+answered by the old build — a green check over a stale binary. Confirm the reconnect took
+by finding the live process rather than by asking `doctor` again:
+
+```sh
+pgrep -af Cosy.Mcp.dll   # the path names the version actually running:
+                         # ~/.nuget/packages/cosy.mcp/<version>/tools/net8.0/any/Cosy.Mcp.dll
+```
+
+**Re-packing at an unchanged version does nothing.** `dotnet tool update` resolves an
+already-extracted `~/.nuget/packages/cosy.mcp/<version>/` and serves the old binary with no
+error. The pack step must therefore raise the version, not just rebuild — in a clone of the
+source repository `mise run release` bumps the csproj, `plugin.json` and the manifest in
+lockstep before packing, which is why it is preferred over a bare pack for anything meant to
+reach another machine.
+
 ## What this plugin actually installs
 
 One MCP server registration, launched as `dotnet tool run cosy-mcp` against the consumer

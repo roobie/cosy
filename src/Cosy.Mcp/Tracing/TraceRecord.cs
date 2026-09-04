@@ -21,9 +21,24 @@ public sealed record TraceRecord
     [JsonPropertyName("is_error")]
     public bool IsError { get; init; }
 
+    /// <summary>
+    /// The envelope's <c>error.kind</c> for a dispatch that returned, or one of the two
+    /// dispatch-level kinds (<c>unhandled_exception</c>, <c>dispatch_canceled</c>) for one that
+    /// threw. This field is a SUPERSET of the ADR-0004 twelve-kind taxonomy by design — see
+    /// <see cref="TraceSink.EmitFault"/> for why collapsing them would lose the distinction.
+    /// </summary>
     [JsonPropertyName("error_kind")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ErrorKind { get; init; }
+
+    /// <summary>
+    /// CLR type name of the exception, present only on records written by
+    /// <see cref="TraceSink.EmitFault"/>. Type only — never the message or stack (see that
+    /// method's remarks).
+    /// </summary>
+    [JsonPropertyName("exception_type")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExceptionType { get; init; }
 
     [JsonPropertyName("resolved_symbol")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -31,6 +46,15 @@ public sealed record TraceRecord
 
     [JsonPropertyName("args")]
     public object? Args { get; init; }
+
+    /// <summary>
+    /// D-04/SC-1: the 8-char session discriminator that also names this record's file
+    /// (<c>{prefix}.{session}.jsonl</c>). Carried on every record — not just derivable from the
+    /// filename — so a concatenated or renamed corpus is still session-countable.
+    /// </summary>
+    [JsonPropertyName("session")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Session { get; init; }
 }
 
 /// <summary>

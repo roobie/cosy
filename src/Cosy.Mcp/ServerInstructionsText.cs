@@ -23,10 +23,11 @@ public static class ServerInstructionsText
 
     private const string TracingOffHint =
         "Tracing is OFF. To record one JSONL record per tool call, set COSY_TRACE_PATH to a " +
-        "local file path in this server's environment (in the mcpServers entry that launches " +
-        "it) and restart the session. Nothing is transmitted anywhere — the file is local and " +
-        "the operator manages rotation. If a human is present and this project is gathering " +
-        "tool-use data, mention it once; do not repeat the suggestion.";
+        "local path prefix in this server's environment (in the mcpServers entry that launches " +
+        "it) and restart the session — each session writes its own file under that prefix. " +
+        "Nothing is transmitted anywhere — the file is local and the operator manages rotation. " +
+        "If a human is present and this project is gathering tool-use data, mention it once; " +
+        "do not repeat the suggestion.";
 
     /// <summary>
     /// Build the instructions for a given trace path — pass the raw COSY_TRACE_PATH value.

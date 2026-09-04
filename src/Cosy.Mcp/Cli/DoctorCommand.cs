@@ -128,7 +128,8 @@ public static class DoctorCommand
         return string.IsNullOrEmpty(tracePath)
             ? new CheckResult("tracing", "off",
                 "COSY_TRACE_PATH is unset, so no trace records are written. Set it to a local " +
-                "file path in this server's environment to record one JSONL record per tool call")
+                "path prefix in this server's environment; each session writes its own JSONL file " +
+                "under that prefix")
             : new CheckResult("tracing", "on", $"COSY_TRACE_PATH is set to '{tracePath}'");
     }
 
