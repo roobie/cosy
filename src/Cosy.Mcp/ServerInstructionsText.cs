@@ -33,9 +33,28 @@ public static class ServerInstructionsText
     /// Build the instructions for a given trace path — pass the raw COSY_TRACE_PATH value.
     /// Null or empty (the same predicate TraceSink itself short-circuits on) means tracing is
     /// off and the hint is appended.
+    ///
+    /// Reads <see cref="BuildProvenance"/> for the build line. The overload below takes it as
+    /// a parameter so the composition stays a pure function of its inputs and is testable
+    /// without reflecting over whatever assembly the test host happens to be.
     /// </summary>
     public static string Build(string? tracePath) =>
+        Build(tracePath, BuildProvenance.Describe());
+
+    /// <summary>
+    /// Composition core. <paramref name="build"/> names the running build, e.g.
+    /// `Debug 0.1.2+ebea452ed133`.
+    ///
+    /// The build line is UNCONDITIONAL, unlike the tracing hint. The hint disappears once the
+    /// operator has acted on it because it asks for an action; this line answers a question the
+    /// agent has afresh every session — *which* server am I talking to — and it is asked most
+    /// often precisely when two are registered and behaving differently. Costing a line of
+    /// context per session is the point, not an oversight.
+    /// </summary>
+    public static string Build(string? tracePath, string build) =>
         string.IsNullOrEmpty(tracePath)
-            ? Identity + "\n\n" + TracingOffHint
-            : Identity;
+            ? Identity + "\n\n" + BuildLine(build) + "\n\n" + TracingOffHint
+            : Identity + "\n\n" + BuildLine(build);
+
+    private static string BuildLine(string build) => $"Build: {build}.";
 }

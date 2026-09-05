@@ -22,7 +22,7 @@ public static class CliDispatch
 
         if (args.Length == 1 && (args[0] == "--version" || args[0] == "-v"))
         {
-            Console.Out.WriteLine(VersionCore(GetInformationalVersion()));
+            Console.Out.WriteLine(BuildProvenance.Describe());
             return true;
         }
 
@@ -41,18 +41,25 @@ public static class CliDispatch
     /// version-skew comparison normalise identically — Directory.Build.props folds
     /// SourceRevisionId into AssemblyInformationalVersion (e.g. "0.1.0+2be16fa..."), while
     /// plugin.json's version is the bare "0.1.0".
+    ///
+    /// Also drops a leading configuration word. Since ace4c6e, `--version` prints
+    /// <see cref="BuildProvenance.Describe"/> -- "Release 0.1.3+&lt;sha&gt;" -- so the running side
+    /// reaches `doctor` with "Release " in front while plugin.json's side stays bare. Without
+    /// this, the two sides no longer normalise identically and the version check reports skew
+    /// against every consumer, which is what it did between ace4c6e and this fix.
     /// </summary>
     public static string VersionCore(string version)
     {
+        var lastSpace = version.LastIndexOf(' ');
+        if (lastSpace >= 0) version = version[(lastSpace + 1)..];
         var plusIndex = version.IndexOf('+');
         return plusIndex < 0 ? version : version[..plusIndex];
     }
 
-    private static string GetInformationalVersion()
-    {
-        var asm = Assembly.GetExecutingAssembly();
-        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        if (!string.IsNullOrEmpty(info)) return info;
-        return asm.GetName().Version?.ToString() ?? "0.0.0";
-    }
+    /// <summary>
+    /// Delegates to <see cref="BuildProvenance"/>, which reads the same attribute and is also
+    /// consulted by the instructions string and `doctor` — one reader, so the three surfaces
+    /// cannot disagree about which build is running.
+    /// </summary>
+    private static string GetInformationalVersion() => BuildProvenance.InformationalVersion;
 }

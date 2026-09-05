@@ -1,0 +1,17 @@
+{
+  "description": "Warns when the consumer's tool manifest pins a different Cosy build than this plugin ships against -- the one skew `claude plugin update` cannot fix.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/check-tool-version.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

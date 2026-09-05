@@ -88,6 +88,7 @@ public static class DoctorCommand
         {
             checks.Add(new CheckResult("version", "skipped",
                 "no plugin version available -- pass --plugin-root, --plugin-version, or set CLAUDE_PLUGIN_ROOT"));
+            checks.Add(CheckBuild());
             checks.Add(CheckTracing());
             return Finish(checks, ExitHealthy, json, stdout);
         }
@@ -98,6 +99,7 @@ public static class DoctorCommand
         {
             checks.Add(new CheckResult("version", "pass",
                 $"running version core '{runningCore}' matches plugin version core '{pluginCore}'"));
+            checks.Add(CheckBuild());
             checks.Add(CheckTracing());
             return Finish(checks, ExitHealthy, json, stdout);
         }
@@ -106,6 +108,23 @@ public static class DoctorCommand
             $"running version core '{runningCore}' does not match plugin version core '{pluginCore}'"));
         return Finish(checks, ExitVersionFail, json, stdout);
     }
+
+    /// <summary>
+    /// Names the build that is answering: configuration plus the full informational version,
+    /// commit metadata included. Informational like <see cref="CheckTracing"/> — the status is
+    /// never `fail` and it never moves the exit code, because there is no such thing as a wrong
+    /// build configuration to be installed in.
+    ///
+    /// It earns its line because the `version` check immediately below CANNOT see this: that
+    /// check compares version *cores* (`0.1.2` against plugin.json's `0.1.2`) and passes
+    /// happily when a Debug working-tree build and a Release nupkg four commits apart both
+    /// call themselves 0.1.2 — measured, 2026-09-04. `version` answers "do the labels agree";
+    /// this answers "which artifact is it", and only the second distinguishes the two servers
+    /// this repository deliberately registers at once.
+    /// </summary>
+    private static CheckResult CheckBuild() =>
+        new("build", BuildProvenance.Configuration.ToLowerInvariant(),
+            $"running {BuildProvenance.Configuration} build {BuildProvenance.InformationalVersion}");
 
     /// <summary>
     /// Reports whether tracing is switched on. Purely informational: the returned status is

@@ -76,6 +76,21 @@ repository** — the C# repo you want Cosy to work in.
 
 ## Updating
 
+**`claude plugin update` does not update the server.** It cannot: this plugin ships no
+binary. Its payload is this README, the agent, the hook, and a `.mcp.json` whose launch line
+is `dotnet tool run cosy-mcp` — and `dotnet tool run` resolves the dll from *your
+repository's* local tool manifest, not from the plugin. So updating the plugin refreshes
+prose while the same old build keeps answering every tool call, and `plugin.json`'s version
+names the plugin package rather than the build. The commands below are what change it.
+
+A **SessionStart hook** (`hooks/check-tool-version.sh`) compares the version your session's
+manifest resolves against the version this plugin ships with, and warns when they diverge.
+It never executes the pinned binary — deliberately, since a build old enough to be the
+problem is too old to diagnose itself. It is silent when they match and exits `0` always,
+including where the repository has no tool manifest. **`/cosy:update`** performs the re-pin
+and flags sibling git worktrees still on the old version; each worktree carries its own
+manifest and is updated independently.
+
 Pull a newer clone, re-pack, then re-pin the consumer repo's manifest — `dotnet tool
 update` (not `install`) moves the pin to whatever version the pack directory now holds:
 
@@ -83,10 +98,20 @@ update` (not `install`) moves the pin to whatever version the pack directory now
 dotnet tool update --add-source <path-to-the-clone>/artifacts/nupkg Cosy.Mcp
 ```
 
-Then confirm the bump actually landed with `dotnet tool run cosy-mcp doctor` — its
-`version` check fails loudly (exit `5`) if the manifest and the plugin still disagree,
-which is exactly the version-skew state a `git pull` without a matching update leaves you
-in.
+Then confirm the bump landed with `doctor`. **It must be told what the plugin version is**,
+or the check that would catch skew does not run:
+
+```sh
+CLAUDE_PLUGIN_ROOT=<path-to-the-clone>/plugins/cosy dotnet tool run cosy-mcp doctor
+# or, equivalently:
+dotnet tool run cosy-mcp doctor --plugin-version <the plugin's version>
+```
+
+Given either, the `version` check fails loudly (exit `5`) when the manifest and the plugin
+disagree — exactly the state a `git pull` without a matching update leaves you in. Run bare,
+from an ordinary shell where `CLAUDE_PLUGIN_ROOT` is unset, it reports `version: skipped --
+no plugin version available` and **exits `0`**, so a bare `doctor` is not evidence that the
+versions agree.
 
 **Then restart Claude Code.** `doctor` inspects files on disk; it cannot see that the MCP
 server process launched at session start is still executing the *previous* package. Until
@@ -162,8 +187,11 @@ Two facts a newcomer reliably gets wrong:
 
 ## `doctor`
 
-Run `dotnet tool run cosy-mcp doctor` once after install. It runs three checks in order
-and stops at the first failure:
+Run `dotnet tool run cosy-mcp doctor` once after install, **supplying the plugin version**
+(`--plugin-version`, `--plugin-root`, or `CLAUDE_PLUGIN_ROOT` in the environment). Without
+it the `version` check reports `skipped -- no plugin version available` and `doctor` still
+exits `0` — a pass that omitted its most important check, which is not evidence the
+versions agree. It runs three checks in order and stops at the first failure:
 
 | Check | What it actually observes |
 |-------|----------------------------|
