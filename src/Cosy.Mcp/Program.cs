@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Cosy.Mcp;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Cli;
 using Cosy.Mcp.Symbols;
 using Cosy.Mcp.Tracing;
@@ -8,6 +9,8 @@ using Microsoft.Build.Locator;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
 
 // 0. CLI subcommand dispatch — MUST precede statement 1 (MSBuildLocator.RegisterDefaults()
 //    has no business running for a JSON decision) and statement 2 (Console.SetOut neuters
@@ -73,16 +76,24 @@ builder.Services
     .WithToolsFromAssembly()
     .WithRequestFilters(filters => filters.AddCallToolFilter(next => async (context, ct) =>
     {
-        var sink = context.Services?.GetService<TraceSink>();
-        if (sink is null) return await next(context, ct);
-
         var toolName = context.Params?.Name ?? "(unknown)";
         // SDK exposes Arguments as IDictionary<string, JsonElement>?; Emit accepts
         // the same type to avoid an unnecessary copy on a hot path. Sink does not mutate.
         var args = context.Params?.Arguments;
 
+        // ADR-0019. Two placement decisions, both load-bearing:
+        //  - INSIDE the traced dispatch, so a repaired argument fault is traced as the
+        //    invalid_argument it now is rather than as the unhandled_exception it used to be.
+        //  - OUTSIDE the sink null-check below, so the envelope a caller receives never depends
+        //    on whether COSY_TRACE_PATH happens to be configured.
+        var schema = ArgumentGuard.SchemaOf(context.MatchedPrimitive as McpServerTool);
+        ValueTask<CallToolResult> Guarded() => ArgumentGuard.InvokeAsync(schema, args, () => next(context, ct));
+
+        var sink = context.Services?.GetService<TraceSink>();
+        if (sink is null) return await Guarded();
+
         // Body lives in TraceDispatch so the throw path is unit-testable — see that type.
-        return await TraceDispatch.InvokeAsync(sink, toolName, args, () => next(context, ct));
+        return await TraceDispatch.InvokeAsync(sink, toolName, args, Guarded);
     }));
 
 await builder.Build().RunAsync();

@@ -14,7 +14,12 @@ public sealed record WorkspaceOpenToolData(
     [property: JsonPropertyName("document_count")] int DocumentCount,
     [property: JsonPropertyName("diagnostics")]    IReadOnlyList<WorkspaceOpenDiagnostic> Diagnostics,
     [property: JsonPropertyName("resolved_tfm")]   string? ResolvedTfm,
-    [property: JsonPropertyName("msbuild")]        WorkspaceOpenMsBuild? MsBuild);
+    [property: JsonPropertyName("msbuild")]        WorkspaceOpenMsBuild? MsBuild,
+    // ADR-0020. The directory this server resolves relative paths against. The caller cannot see
+    // it any other way and it is NOT necessarily the session's own directory: a Claude Code MCP
+    // server keeps its launch cwd for the process lifetime and is not respawned when the session
+    // moves into a git worktree.
+    [property: JsonPropertyName("server_cwd")]     string ServerCwd);
 
 public sealed record WorkspaceOpenDiagnostic(
     [property: JsonPropertyName("kind")]    string Kind,
@@ -63,7 +68,13 @@ public sealed class WorkspaceOpenTool
         if (!File.Exists(absolutePath))
             return Envelope<WorkspaceOpenToolData>.Err(
                 ToolError.InvalidArgument("path", "not_found", value: path,
-                    message: $"path not found: {path}"));
+                    message: Path.IsPathRooted(path)
+                        ? $"path not found: {path}"
+                        // A RELATIVE path that misses is the worktree trap: it resolved against
+                        // this server's cwd, which the caller may not share. Name both, so the
+                        // failure diagnoses itself instead of reading as "the file is gone".
+                        : $"path not found: {path} (resolved to {absolutePath} against server " +
+                          $"cwd {Directory.GetCurrentDirectory()}; pass an absolute path)"));
 
         var ext = Path.GetExtension(absolutePath).ToLowerInvariant();
         if (ext != ".sln" && ext != ".slnx" && ext != ".csproj")
@@ -96,7 +107,8 @@ public sealed class WorkspaceOpenTool
                 ResolvedTfm: result.ResolvedTfm,
                 MsBuild: result.MsBuild is { } mb
                     ? new WorkspaceOpenMsBuild(mb.Kind, mb.Path, mb.Version)
-                    : null);
+                    : null,
+                ServerCwd: Directory.GetCurrentDirectory());
 
             return Envelope<WorkspaceOpenToolData>.Ok(data, result.ElapsedMs);
         }

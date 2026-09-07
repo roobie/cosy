@@ -48,6 +48,25 @@ public sealed record ToolError(
         => new(ToolErrorKind.InvalidArgument, message ?? $"{param}: {reason}",
                new InvalidArgumentDetails(param, reason, value));
 
+    /// <summary>
+    /// A required parameter was absent from the arguments dictionary (ADR-0019). Distinct from
+    /// <see cref="InvalidArgument"/> in the one respect that matters to the caller: it carries
+    /// <paramref name="accepted"/>, the parameter names the tool does have, because a caller that
+    /// omits a required name has usually supplied an invented one in its place.
+    /// </summary>
+    public static ToolError MissingRequiredArgument(string param, IReadOnlyList<string> accepted)
+        => new(ToolErrorKind.InvalidArgument, $"{param}: required",
+               new InvalidArgumentDetails(param, "required", null, accepted));
+
+    /// <summary>
+    /// The arguments were all present but one could not be bound to its declared type (ADR-0019).
+    /// <paramref name="binderMessage"/> is the SDK binder's own text, which names the offending
+    /// parameter; it is safe to return because it describes arguments the caller just sent.
+    /// </summary>
+    public static ToolError ArgumentBindingFailed(string binderMessage, IReadOnlyList<string> accepted)
+        => new(ToolErrorKind.InvalidArgument, binderMessage,
+               new InvalidArgumentDetails("arguments", "binding_failed", null, accepted));
+
     public static ToolError UnsupportedOption(string param, string requested, IReadOnlyList<string> supported)
         => new(ToolErrorKind.UnsupportedOption, $"{param}='{requested}' not supported",
                new UnsupportedOptionDetails(param, requested, supported));
@@ -108,7 +127,14 @@ public sealed record ToolError(
 public sealed record InvalidArgumentDetails(
     [property: JsonPropertyName("param")]  string Param,
     [property: JsonPropertyName("reason")] string Reason,
-    [property: JsonPropertyName("value")]  object? Value);
+    [property: JsonPropertyName("value")]  object? Value,
+
+    // ADR-0019: present only on the two dispatch-level argument faults, where naming the
+    // parameters the tool actually accepts is the repair the caller needs -- a caller that
+    // invented a name cannot discover the real one from `param` alone. WhenWritingNull, so every
+    // pre-existing invalid_argument emission stays byte-identical.
+    [property: JsonPropertyName("accepted"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? Accepted = null);
 
 public sealed record UnsupportedOptionDetails(
     [property: JsonPropertyName("param")]     string Param,

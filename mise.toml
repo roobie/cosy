@@ -1,7 +1,15 @@
 # Toolchain pin only. The build and install recipes live in the `justfile` — one runner,
 # not two saying the same thing in different syntax. `mise` here is for getting a matching
-# SDK; `just` is for doing something with it. Neither is required: the README spells out
-# the plain dotnet commands, and `global.json` already asks for "SDK 8 or newer".
+# SDK; `just` is for doing something with it. Neither runner is required — the README spells
+# out the plain dotnet commands — but the SDK VERSION is: `global.json` asks for 10.0.100,
+# because Roslyn 5.3.0's analyzers reference compiler 4.12.0.0 and SDK 8 ships 4.11.0.0
+# (`CS9057`). SDK 10 builds this; SDK 8 cannot.
+#
+# The second pin is therefore for a RUNTIME, never for building. Both projects target net8.0,
+# but only src/Cosy.Mcp sets RollForward=LatestMajor; the test project's runtimeconfig carries
+# no rollForward, so it takes the default `Minor`, which does not cross a major version — on a
+# host with only .NET 10 the test host will not start. Installing SDK 8 is simply the
+# verified way to get its runtime and the net8.0 targeting pack onto the machine.
 [tools]
-dotnet = "10.0.202"
+dotnet = ["10.0.202", "8.0.420"]
 node = "22"

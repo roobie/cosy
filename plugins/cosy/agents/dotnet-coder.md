@@ -76,6 +76,14 @@ against those and retry the same verb. Do not abandon a Cosy verb for `Read` plu
 arithmetic because a first lookup missed; that is exactly the fallback behavior this agent
 exists to replace.
 
+**`invalid_argument` with `details.accepted` means you used a parameter name the tool does not
+have.** The list is the tool's whole accepted vocabulary — read it and retry, in one round trip.
+This error exists because inventing plausible-sounding names is a real failure mode: `query` for
+`find_text`'s `pattern`, `file` for `read_source`'s `symbol` (which takes a symbol, never a path).
+Several verbs failing this way in a row is *not* evidence that the server is broken — it is the
+same mistake repeated, and the reply now tells you so. Check `details.param` and `details.accepted`
+before concluding anything about Cosy's health.
+
 ## Corpus boundary
 
 `find_text` and `find_files` search Roslyn `Document`s in the currently loaded Solution, and

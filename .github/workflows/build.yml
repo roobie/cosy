@@ -12,10 +12,23 @@
 #      exits 5 when they disagree. Upstream, that lockstep is enforced by a release script
 #      only when someone runs it; here it is enforced on every push.
 #
-# The SDK matrix is not padding. The tool targets net8.0 with RollForward=LatestMajor, and
-# MSBuildLocator resolves the SDK matching the HOST RUNTIME major — so the runtime it lands
-# on decides which solutions it can evaluate. A runner carrying exactly one SDK is the only
-# honest test of that claim; a dev machine with several installed cannot fail it.
+# THERE IS NO SDK MATRIX ANY MORE, and the reason is worth stating rather than leaving as an
+# absence. This job used to build under both 8.0.x and 10.0.x. The 8.0.x leg could never pass:
+# Cosy pins Roslyn 5.3.0, whose analyzer assemblies reference compiler 4.12.0.0, while SDK 8
+# ships 4.11.0.0 —
+#
+#   CSC : error CS9057: The analyzer assembly '…Microsoft.CodeAnalysis.Analyzers.dll'
+#   references version '4.12.0.0' of the compiler, which is newer than the currently
+#   running version '4.11.0.0'.
+#
+# "SDK 8 can build this" was a documented claim that no CI run had ever executed. It is now
+# corrected everywhere: global.json asks for 10.0.100, so an SDK 8 machine is told it lacks
+# the SDK instead of dying inside csc a minute and a half later.
+#
+# What the matrix was really guarding is still guarded, by the last step instead: the tool
+# targets net8.0 with RollForward=LatestMajor and is promised to run on .NET 8, 9 or 10.
+# Every step here otherwise runs it on the newest runtime present, so nothing else can
+# falsify the .NET 8 floor.
 
 name: build
 
@@ -32,18 +45,18 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # global.json asks for 8.0.100 with rollForward: latestMajor, so both satisfy it.
-        dotnet: ['8.0.x', '10.0.x']
 
     steps:
       - uses: actions/checkout@v4
 
+      # 10.0.x BUILDS (global.json asks for 10.0.100). 8.0.x is installed only to put the
+      # .NET 8 shared runtime on the machine, so the floor assertion at the end has something
+      # real to pin to — it is never used to compile.
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: ${{ matrix.dotnet }}
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Build
         run: dotnet build Cosy.sln -c Release
@@ -61,7 +74,8 @@ jobs:
           cd "$RUNNER_TEMP/consumer"
           dotnet new tool-manifest
           dotnet tool install --add-source "$GITHUB_WORKSPACE/artifacts/nupkg" Cosy.Mcp
-          # Required on SDK 8, a no-op on SDK 10, which auto-restores.
+          # A no-op under the SDK 10 that builds here, but kept because a CONSUMER may be on
+          # SDK 8 (which does not auto-restore) and this step is meant to mirror what they do.
           dotnet tool restore
 
       # Exit code is doctor's own: 3 manifest, 4 tool_run, 5 version mismatch. Failing the
@@ -72,8 +86,29 @@ jobs:
           cd "$RUNNER_TEMP/consumer"
           dotnet tool run cosy-mcp doctor --plugin-root "$GITHUB_WORKSPACE/plugins/cosy"
 
+      # THE .NET 8 FLOOR, asserted rather than assumed. RollForward=LatestMajor always lands
+      # on the newest runtime present, so every step above ran on .NET 10 and none of them
+      # could falsify the README's "runs on .NET 8, 9 or 10". This pins the runtime.
+      #
+      # It must be unable to pass by not running: a missing 8.x runtime is a failure here,
+      # never a skip, and DOTNET_ROLL_FORWARD=Disable stops the host quietly moving to 10 and
+      # reporting success for a launch that never touched .NET 8.
+      - name: assert the packed tool starts on the .NET 8 runtime
+        run: |
+          fx=$(dotnet --list-runtimes \
+                 | grep '^Microsoft.NETCore.App 8\.' \
+                 | awk '{print $2}' | head -n1)
+          if [ -z "$fx" ]; then
+            echo "FATAL: no Microsoft.NETCore.App 8.x runtime on this runner -- the floor this step exists to prove cannot be tested, which is a failure and not a pass" >&2
+            dotnet --list-runtimes >&2
+            exit 1
+          fi
+          echo "pinning to .NET $fx"
+          DOTNET_ROLL_FORWARD=Disable dotnet exec --fx-version "$fx" \
+            src/Cosy.Mcp/bin/Release/net8.0/Cosy.Mcp.dll --version
+
       - uses: actions/upload-artifact@v4
         with:
-          name: nupkg-net${{ matrix.dotnet }}
+          name: nupkg
           path: artifacts/nupkg/*.nupkg
           if-no-files-found: error

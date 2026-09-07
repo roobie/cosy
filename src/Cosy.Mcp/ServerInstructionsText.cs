@@ -39,7 +39,7 @@ public static class ServerInstructionsText
     /// without reflecting over whatever assembly the test host happens to be.
     /// </summary>
     public static string Build(string? tracePath) =>
-        Build(tracePath, BuildProvenance.Describe());
+        Build(tracePath, BuildProvenance.Describe(), Directory.GetCurrentDirectory());
 
     /// <summary>
     /// Composition core. <paramref name="build"/> names the running build, e.g.
@@ -52,9 +52,33 @@ public static class ServerInstructionsText
     /// context per session is the point, not an oversight.
     /// </summary>
     public static string Build(string? tracePath, string build) =>
+        Build(tracePath, build, Directory.GetCurrentDirectory());
+
+    /// <summary>
+    /// Composition core proper. ADR-0020. <paramref name="cwd"/> is the server's working directory.
+    ///
+    /// CWD is reported for the same reason the build line is, and the reasoning transfers
+    /// exactly: it answers a question the agent has afresh every session, cannot answer any other
+    /// way, and needs answered most precisely when the answer is surprising. A Claude Code MCP
+    /// server inherits the directory its session was launched in and keeps it for the process
+    /// lifetime; a session that later moves into a git worktree does NOT get its servers
+    /// respawned. Observed 2026-09-05: one Cosy process whose cwd was a
+    /// repository's main checkout served workspace_open calls against two sibling checkouts and
+    /// a worktree beneath `.claude/worktrees/` across nineteen hours, while its own session's
+    /// cwd was that worktree. Every relative path
+    /// this server resolves -- workspace_open's `path` -- resolves against THIS directory, not the
+    /// one the caller believes it is in. Printing it IS the mitigation: the server cannot chdir
+    /// itself into a worktree it is never told about, and no hook can chdir it either (Claude
+    /// Code has nine hook events and none fires on worktree entry).
+    /// </summary>
+    public static string Build(string? tracePath, string build, string cwd) =>
         string.IsNullOrEmpty(tracePath)
-            ? Identity + "\n\n" + BuildLine(build) + "\n\n" + TracingOffHint
-            : Identity + "\n\n" + BuildLine(build);
+            ? Identity + "\n\n" + BuildLine(build) + "\n" + CwdLine(cwd) + "\n\n" + TracingOffHint
+            : Identity + "\n\n" + BuildLine(build) + "\n" + CwdLine(cwd);
+
+    private static string CwdLine(string cwd) =>
+        $"Server CWD: {cwd} (relative paths resolve here, which is NOT necessarily your " +
+        "session's directory -- pass absolute paths).";
 
     private static string BuildLine(string build) => $"Build: {build}.";
 }

@@ -1,6 +1,6 @@
 {
   "name": "cosy",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Roslyn-over-MCP substrate for C#: semantic navigation plus verified, snapshot-guarded edits, with a DotnetCoder subagent whose tool list is the Cosy verbs plus Read.",
   "author": {
     "name": "BR",
