@@ -52,54 +52,16 @@ install-global: pack
 uninstall-global:
     dotnet tool uninstall --global Cosy.Mcp
 
+# DIR is your own C# repository, not this one:  just install-into ~/work/my-api
+#
+# The plugin launches the server as `dotnet tool run cosy-mcp`, which resolves a tool
+# manifest by walking up from the directory it runs in — hence a per-consumer-repo
+# install rather than the global one above. The recipe body lives in
+# scripts/install-into.sh — see that file for the Windows/bash caveats and the
+# trailing-backslash quoting note.
 # Install into DIR's local tool manifest — the path the Claude Code plugin needs (bash).
 install-into dir: pack
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # ON WINDOWS THIS RECIPE NEEDS bash ON PATH (Git for Windows or WSL). The
-    # `windows-shell` setting above does NOT apply here: just runs a shebang recipe by
-    # writing the body to a file and invoking the shebang command, so `set shell` and
-    # `set windows-shell` are both bypassed by design. It is a shebang recipe because the
-    # steps below share state — a `cd`, then a conditional, then four commands — and
-    # non-shebang recipe lines each run in their own shell.
-    #
-    # Windows without bash: run the four commands from the README by hand in pwsh. A
-    # PowerShell translation of this recipe is not shipped because it could not be tested
-    # here, and an untested install path is worse than a documented manual one.
-    #
-    # A stock Windows machine can have a `bash` on PATH that resolves to the WSL launcher
-    # stub at C:\Windows\System32\bash.exe rather than Git for Windows' bash — that stub
-    # fails or behaves differently here, and lacks the `cygpath` Git bash carries. If this
-    # recipe can't find a working bash, prepend Git's own bin dir (typically
-    # `C:\Program Files\Git\usr\bin`) to PATH so its bash and cygpath resolve first.
-    #
-    # DIR is your own C# repository, not this one:  just install-into ~/work/my-api
-    #
-    # The plugin launches the server as `dotnet tool run cosy-mcp`, which resolves a tool
-    # manifest by walking up from the directory it runs in — hence a per-consumer-repo
-    # install rather than the global one above.
-    #
-    # Strip a trailing backslash before it ever reaches a quoted string below: just
-    # substitutes {{dir}} verbatim into this script, so a Windows-style path pasted with
-    # its trailing `\` (e.g. `C:\work\my-api\`) produces `cd "C:\work\my-api\"` — inside
-    # bash double quotes, `\"` is an escaped literal quote, not a closing one, so the
-    # string never closes and bash fails with "unexpected EOF while looking for matching
-    # `"'" instead of running the recipe.
-    dir="{{dir}}"
-    dir="${dir%\\}"
-    cd "$dir"
-    # The manifest lands at .config/dotnet-tools.json on SDK 8 and at the directory root on
-    # SDK 10. Either is resolved the same way, so check both before creating a second one.
-    if [ ! -f dotnet-tools.json ] && [ ! -f .config/dotnet-tools.json ]; then
-      dotnet new tool-manifest
-    fi
-    dotnet tool update --add-source "{{nupkg}}" Cosy.Mcp
-    # SDK 8 needs this; SDK 10 auto-restores and it is a no-op there.
-    dotnet tool restore
-    # Ending on doctor means a broken install says so here, rather than as a silent MCP
-    # failure three steps later. A non-zero exit is doctor's own: 3 manifest, 4 tool_run,
-    # 5 version mismatch.
-    dotnet tool run cosy-mcp doctor --plugin-root "{{plugin}}"
+    bash "{{justfile_directory()}}/scripts/install-into.sh" "{{dir}}" "{{nupkg}}" "{{plugin}}"
 
 # Re-check an existing install in DIR, changing nothing.
 doctor dir:
