@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Search;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
@@ -100,7 +101,7 @@ public sealed class CheckSnapshotTool
                 if (tree is not null) changedTrees.Add(tree);
             }
 
-            var solutionDir = Path.GetDirectoryName(staged.FilePath ?? current!.FilePath) ?? "";
+            var solutionDir = SolutionPaths.GetSolutionDirectory(staged);
             var diagnostics = new List<CheckSnapshotDiagnostic>();
             foreach (var projId in changedProjectIds)
             {

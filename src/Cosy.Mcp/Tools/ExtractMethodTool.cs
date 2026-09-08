@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
 using Cosy.Mcp.Refactor;
+using Cosy.Mcp.Search;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
@@ -67,7 +68,10 @@ public sealed class ExtractMethodTool
         "post-extract diagnostics. Requires workspace_open first. dryRun must be true.")]
     public async Task<object> ExtractAsync(
         [Description("Relative or absolute file path; suffix-matched against the workspace documents (one-and-only-one match required).")] string file,
-        [Description("Extract span as {start, end} zero-based character offsets, end-exclusive (ADR-0004 §3).")] Span span,
+        [Description("Extract span as {start, end} zero-based, end-exclusive UTF-16 code unit " +
+            "offsets into the document's Roslyn SourceText (ADR-0004 §3) -- never byte offsets " +
+            "from wc -c or ls -l, and wc -m is also wrong since it disagrees with SourceText on " +
+            "surrogate pairs; see ADR-0004 §3 for where a correct offset comes from.")] Span span,
         [Description("Name of the new method. Must be a valid C# identifier.")] string newMethodName,
         [Description("Must be true; false is not supported in spike (RenameTool precedent).")] bool dryRun,
         IWorkspaceHost workspaceHost,
@@ -273,7 +277,7 @@ public sealed class ExtractMethodTool
             }
 
             // --- EDIT EXTRACTION (RenameTool pattern; emit NewTextLength only per D-07) ---
-            var solutionDir = Path.GetDirectoryName(baseSolution.FilePath ?? document.Project.Solution.FilePath)!;
+            var solutionDir = SolutionPaths.GetSolutionDirectory(baseSolution);
             var edits = new List<ExtractMethodEdit>();
             var changedDocIds = new List<DocumentId>();
             foreach (var projChanges in projectChanges)

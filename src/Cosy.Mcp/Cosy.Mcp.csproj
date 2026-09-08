@@ -24,7 +24,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>cosy-mcp</ToolCommandName>
     <PackageId>Cosy.Mcp</PackageId>
-    <Version>0.1.5</Version>
+    <Version>0.1.6</Version>
     <Description>Roslyn-over-MCP substrate for C#: semantic navigation plus verified, snapshot-guarded edits. Requires a .NET SDK on the host.</Description>
     <Authors>BR</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

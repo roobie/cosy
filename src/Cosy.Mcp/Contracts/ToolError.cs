@@ -4,8 +4,9 @@ namespace Cosy.Mcp.Contracts;
 
 /// <summary>
 /// Closed enum of tool-error kinds on the wire (ADR-0004 §4, D-06; extended by ADR-0007 §3.2,
-/// D-14, D-15; extended by Phase 12 D-03/D-04). The const strings ARE the wire values — do not
-/// rename casually. Exactly these 13 strings ever appear as <see cref="ToolError.Kind"/>.
+/// D-14, D-15; extended by Phase 12 D-03/D-04; extended by Phase 14 D-08). The const strings ARE
+/// the wire values — do not rename casually. Exactly these 14 strings ever appear as
+/// <see cref="ToolError.Kind"/>.
 /// </summary>
 public static class ToolErrorKind
 {
@@ -28,6 +29,12 @@ public static class ToolErrorKind
     // syntax references at all (metadata-only, or IsImplicitlyDeclared) -- deliberately
     // distinct from symbol_not_found, because the resolve succeeded and the source did not exist.
     public const string NoSourceAvailable = "no_source_available";
+
+    // Phase 14 addition (D-08) — 14th kind. A caller-supplied expected_text does not match the
+    // text actually occupying an otherwise in-bounds span -- distinct from out_of_bounds (the
+    // span is valid; the content assumption is wrong) and countable in trace analysis the same
+    // way out_of_bounds is (D-06's adoption revisit depends on this).
+    public const string ExpectedTextMismatch = "expected_text_mismatch";
 }
 
 /// <summary>
@@ -82,6 +89,19 @@ public sealed record ToolError(
     public static ToolError OutOfBounds(string file, Span span, int documentLength)
         => new(ToolErrorKind.OutOfBounds, $"span out of bounds in file {file}",
                new OutOfBoundsDetails(file, span, documentLength));
+
+    /// <summary>
+    /// Phase 14 D-08. <paramref name="actualExcerpt"/> must already be bounded by the call
+    /// site (e.g. <c>Cosy.Mcp.Source.BoundarySnap.TruncateForDisplay</c>) — this factory takes
+    /// no dependency on <c>Cosy.Mcp.Source</c>, mirroring how <paramref name="documentLength"/>
+    /// above is the call site's job for <see cref="OutOfBounds"/>. Passing an unbounded string
+    /// here puts unbounded source text on the wire.
+    /// </summary>
+    public static ToolError ExpectedTextMismatch(string file, Span span, string actualExcerpt, bool differsOnlyByLineEndings)
+        => new(ToolErrorKind.ExpectedTextMismatch,
+               $"expected_text does not match the text at the span in file {file}"
+                   + (differsOnlyByLineEndings ? "; the two differ only by line endings" : ""),
+               new ExpectedTextMismatchDetails(file, span, actualExcerpt, differsOnlyByLineEndings));
 
     public static ToolError OverlappingEdits(string file, IReadOnlyList<Span> spans)
         => new(ToolErrorKind.OverlappingEdits, $"overlapping edits in file {file}",
@@ -213,3 +233,11 @@ public sealed record DiskConflictDetails(
 public sealed record NoSourceAvailableDetails(
     [property: JsonPropertyName("symbol_id")]         string SymbolId,
     [property: JsonPropertyName("metadata_assembly")] string? MetadataAssembly);
+
+// --- Phase 14 details record (D-08). ---
+
+public sealed record ExpectedTextMismatchDetails(
+    [property: JsonPropertyName("file")]                          string File,
+    [property: JsonPropertyName("span")]                          Span Span,
+    [property: JsonPropertyName("actual_excerpt")]                string ActualExcerpt,
+    [property: JsonPropertyName("differs_only_by_line_endings")]  bool DiffersOnlyByLineEndings);

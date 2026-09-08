@@ -132,9 +132,34 @@ public static class TraceArgShaping
     }
 
     /// <summary>
+    /// Arguments identifying/coordinating an <c>edits[]</c> element -- kept verbatim regardless of
+    /// JSON value kind. Deliberately NOT the same set as the top-level <see cref="VerbatimKeys"/>:
+    /// a key that identifies existing code at the top level is not automatically an identity key
+    /// inside an edit element, and vice versa -- the two tables are scoped independently. Public so
+    /// <c>Reflection_EveryEditRequestMember_IsClassified</c> (14-01, D-12) can assert every
+    /// <c>EditRequest</c> wire member is classified here, rather than the test hand-copying a list
+    /// that could itself drift from this one.
+    /// </summary>
+    public static readonly IReadOnlySet<string> EditVerbatimKeys = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "file", "span",
+    };
+
+    /// <summary>
+    /// Arguments that WRITE free text into source inside an <c>edits[]</c> element -- shaped, never
+    /// copied verbatim. See <see cref="EditVerbatimKeys"/> for why this is a separate table from
+    /// the top-level <see cref="ShapedTextKeys"/>.
+    /// </summary>
+    public static readonly IReadOnlySet<string> EditShapedTextKeys = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "new_text", "expected_text",
+    };
+
+    /// <summary>
     /// Per-element transform for the <c>edits</c> array: keeps <c>file</c> and <c>span</c>
-    /// verbatim, drops <c>new_text</c>, adds <c>new_text_length</c>. Also computes the one
-    /// per-call <c>edits_shape</c> label from the resulting (replaced_length, new_text_length)
+    /// verbatim, drops <c>new_text</c> (adds <c>new_text_length</c>) and <c>expected_text</c>
+    /// (adds <c>expected_text_supplied</c> + <c>expected_text_length</c>, D-11). Also computes the
+    /// one per-call <c>edits_shape</c> label from the resulting (replaced_length, new_text_length)
     /// pairs, implementing 13-RESEARCH.md Q2's table.
     /// </summary>
     private static List<object?> ShapeEdits(JsonElement editsArray, out string editsShape)
@@ -159,6 +184,21 @@ public static class TraceArgShaping
                     continue;
                 }
 
+                if (prop.NameEquals("expected_text"))
+                {
+                    // Two keys, never the value (D-11). Both are written ONLY when the property
+                    // is present, so an omitted expected_text produces no derived keys at all --
+                    // 14-01-PLAN.md Task 1's "omitted" case. A length of 0 is ambiguous between
+                    // an explicit null (verification OFF) and an empty string (verification ON),
+                    // and 14-04 Task 3's adoption query needs that distinction to define adoption
+                    // as non-null STRING use rather than mere key presence -- so the flag is
+                    // derived from ValueKind == String, never from property presence alone.
+                    var suppliedAsString = prop.Value.ValueKind == JsonValueKind.String;
+                    perEdit["expected_text_supplied"] = suppliedAsString;
+                    perEdit["expected_text_length"] = suppliedAsString ? prop.Value.GetString()!.Length : 0;
+                    continue;
+                }
+
                 if (prop.NameEquals("span")
                     && prop.Value.ValueKind == JsonValueKind.Object
                     && prop.Value.TryGetProperty("start", out var startEl) && startEl.ValueKind == JsonValueKind.Number
@@ -170,10 +210,14 @@ public static class TraceArgShaping
                 if (prop.NameEquals("file") && prop.Value.ValueKind == JsonValueKind.String)
                     file = prop.Value.GetString();
 
-                // file, span, and any other key an EditRequest ever grows stay verbatim -- D-06's
-                // redaction is scoped to new_text only (13-RESEARCH.md Pitfall 3 is the trap of
-                // scoping this too narrowly; it is not a trap of scoping it too broadly).
-                perEdit[prop.Name] = prop.Value;
+                // Inverted per D-10 (14-01-PLAN.md Task 1): an edits[] key is a copy of existing
+                // source until proven otherwise, so an unrecognised key is shaped by default --
+                // the same fail-closed direction ShapeValue already applies at the top level.
+                // EditVerbatimKeys is the explicit, audited exception; everything else routes
+                // through ShapeUnknownEditProperty.
+                perEdit[prop.Name] = EditVerbatimKeys.Contains(prop.Name)
+                    ? prop.Value
+                    : ShapeUnknownEditProperty(prop.Value);
             }
 
             shapedEdits.Add(perEdit);
@@ -182,6 +226,27 @@ public static class TraceArgShaping
 
         editsShape = ClassifyEditsShape(summaries);
         return shapedEdits;
+    }
+
+    /// <summary>
+    /// Fail-closed default for an <c>edits[]</c> key not in <see cref="EditVerbatimKeys"/> (D-10).
+    /// Mirrors <see cref="ShapeValue"/>'s rules minus the identity allowlist -- deliberately
+    /// narrower than "nothing is ever verbatim": D-10's hazard is CONTENT LEAKAGE, and only a
+    /// String or a structured (Object/Array) value can carry it. A bare Number, True, False or
+    /// Null cannot carry a character of source content by construction, so shaping those would
+    /// make the trace strictly less useful for D-06's adoption analysis (14-04 Task 3) while
+    /// protecting nothing -- do not "restore" a broader rule here; three of the seven pinned
+    /// value-kind cases in <c>UnknownEditKey_ShapingFollowsValueKind</c> would then contradict it.
+    /// </summary>
+    private static object? ShapeUnknownEditProperty(JsonElement value)
+    {
+        if (value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null)
+            return value;
+
+        if (value.ValueKind == JsonValueKind.String)
+            return new ShapedText(value.GetString()?.Length ?? 0);
+
+        return new ShapedUnknown(value.ValueKind.ToString());
     }
 
     private readonly record struct EditSummary(string? File, int ReplacedLength, int NewTextLength)

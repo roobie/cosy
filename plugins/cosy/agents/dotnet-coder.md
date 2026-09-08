@@ -41,9 +41,13 @@ not a way to read unmodified source.
 In-Solution C# is read with `read_source` or `read_source_span`; `Read` is for everything else —
 project files, solution files, build-property files, markdown, and build output. This is the same
 corpus boundary `## Corpus boundary` below draws for `find_text`/`find_files`, applied to reading.
-The reason: `read_source` and `read_source_span` return text in the same character-offset
-coordinate system `apply_edits_verified` writes in, so a read-then-edit round-trip cannot drift —
-`Read`'s view carries no such guarantee against that coordinate system.
+The reason: `read_source` and `read_source_span` return text in the same zero-based,
+end-exclusive UTF-16 code unit coordinate system `apply_edits_verified` writes in — never a byte
+count from `wc -c`, and never `wc -m` either, since it disagrees with Roslyn on surrogate pairs —
+so a read-then-edit round-trip cannot drift. A correct offset comes from a span Cosy already
+emitted (`find_text`, `read_source`, `read_source_span`), a .NET/Roslyn string position, or the
+`document_length` an `out_of_bounds` error carries; `Read`'s view carries no such guarantee
+against that coordinate system.
 
 Enter by symbol or by span — there is deliberately no whole-file read. `read_source` takes a
 symbol and returns every declaration site it has; `read_source_span` takes a file and a

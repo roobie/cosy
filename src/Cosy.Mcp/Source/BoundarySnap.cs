@@ -53,6 +53,25 @@ public static class BoundarySnap
     private const string GenericTextKind = "text";
 
     /// <summary>
+    /// Phase 14 D-09: cut <paramref name="value"/> to at most <paramref name="maxUnits"/> UTF-16
+    /// code units, never splitting a surrogate pair. Extracted from <see cref="FirstLineLabel"/>'s
+    /// pre-existing surrogate-safe cut rather than re-derived — this is the phase's only other
+    /// call site (the bounded excerpt on <c>expected_text_mismatch</c>), and the two truncations
+    /// must agree on the same edge case. <paramref name="value"/> shorter than or equal to the
+    /// bound is returned unchanged.
+    /// </summary>
+    public static string TruncateForDisplay(string value, int maxUnits = DisplayNameMaxLength)
+    {
+        if (value.Length <= maxUnits)
+            return value;
+
+        var cut = maxUnits;
+        if (char.IsHighSurrogate(value[cut - 1]) && char.IsLowSurrogate(value[cut]))
+            cut--;
+        return value[..cut];
+    }
+
+    /// <summary>
     /// Snap the end of a read so the returned text is at most <paramref name="maxChars"/>
     /// characters and stops at a syntax boundary where one exists.
     /// </summary>
@@ -212,17 +231,12 @@ public static class BoundarySnap
             var trimmed = line.Trim();
             if (trimmed.Length == 0)
                 continue;
-            if (trimmed.Length <= DisplayNameMaxLength)
-                return trimmed;
-
             // The cap counts UTF-16 code units, so a non-BMP character (emoji, CJK Ext-B) whose
             // pair straddles the cut would leave a lone high surrogate on the wire -- malformed
             // UTF-16 that System.Text.Json escapes rather than rejects, so it fails at the client
-            // instead of here. Step back one unit when the cut lands inside a pair.
-            var cut = DisplayNameMaxLength;
-            if (char.IsHighSurrogate(trimmed[cut - 1]) && char.IsLowSurrogate(trimmed[cut]))
-                cut--;
-            return trimmed[..cut];
+            // instead of here. TruncateForDisplay steps back one unit when the cut lands inside a
+            // pair (Phase 14 D-09) and is a no-op when trimmed already fits.
+            return TruncateForDisplay(trimmed);
         }
         return string.Empty;
     }

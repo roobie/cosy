@@ -47,7 +47,8 @@ public sealed record ReadSourceSpanToolData(
 
 /// <summary>
 /// read_source_span -- returns a Solution document's text at a caller-supplied file+span, in the
-/// same character-offset coordinate system apply_edits_verified consumes (SC-2). The file+span
+/// same zero-based, end-exclusive UTF-16 code unit coordinate system apply_edits_verified
+/// consumes (SC-2). The file+span
 /// secondary to read_source's symbol-primary lookup (D-07, D-09): same "read" family, different
 /// key. The corpus is Roslyn Solution documents only, resolved by the same suffix match
 /// apply_edits_verified uses (D-06) -- a .csproj, .sln, .md or build-output path is unreachable by
@@ -88,7 +89,9 @@ public sealed class ReadSourceSpanTool
             "No filesystem fallback: a .csproj, .sln, .md or non-Solution file is unreachable.")] string file,
         IWorkspaceHost workspaceHost,
         ILogger<ReadSourceSpanTool> logger,
-        [Description("Span to read, {start, end} end-exclusive character offsets. REQUIRED -- " +
+        [Description("Span to read, {start, end} zero-based, end-exclusive UTF-16 code unit " +
+            "offsets into the document's Roslyn SourceText -- never byte offsets from wc -c, and " +
+            "wc -m is also wrong (surrogate pairs). REQUIRED -- " +
             "an omitted span is refused, never answered with a whole-file read.")] Span? span = null,
         [Description("Max characters of text to return (default 8000, range 500..200000). A real " +
             "ceiling: the returned text is never longer, and the cut is snapped back to a " +

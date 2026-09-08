@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
 using Cosy.Mcp.Refactor;
+using Cosy.Mcp.Search;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
@@ -63,7 +64,7 @@ public sealed class ReadSnapshotTool
 
             var staged = entry.Snapshot;
             var baseSolution = ResolveParentSolution(workspaceHost, entry, current!);
-            var solutionDir = Path.GetDirectoryName(staged.FilePath ?? current!.FilePath) ?? "";
+            var solutionDir = SolutionPaths.GetSolutionDirectory(staged);
 
             var documents = new List<ReadSnapshotDocument>();
             foreach (var projChanges in staged.GetChanges(baseSolution).GetProjectChanges())

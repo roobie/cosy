@@ -168,7 +168,7 @@ installed is the most common cause of a failed load.
 | `list_implementations` | Implementations and overrides |
 | `get_members` | Members of a type |
 | `find_text` / `find_files` | Content search and file discovery, scoped to the loaded solution |
-| `read_source` / `read_source_span` | Existing source text, in the same character-offset coordinate system the edit verbs consume |
+| `read_source` / `read_source_span` | Existing source text, in the same UTF-16 code unit coordinate system the edit verbs consume |
 | `compile_check` | Diagnostics for a snippet against the live compilation, no disk write |
 | `run_tests` | `dotnet test` wrapper with TRX parsing and partial results on timeout |
 | `apply_edits_verified` | Atomic edits into a snapshot, reporting only newly introduced diagnostics |
@@ -176,6 +176,12 @@ installed is the most common cause of a failed load.
 | `extract_method` | Roslyn extract-method refactoring into a snapshot |
 | `read_snapshot` / `check_snapshot` | Unified diff and diagnostics for staged work, without committing |
 | `commit_snapshot` / `discard_snapshot` | Write a snapshot to disk, or drop it |
+
+Every offset in this surface — spans, `document_length` — is zero-based, end-exclusive, and
+counted in UTF-16 code units, never bytes. Do not derive one from `wc -c`, `ls -l`, or file
+size; `wc -m` is also wrong, since it disagrees with Roslyn on surrogate pairs. Get offsets
+from a span Cosy already returned, a .NET/Roslyn string position, or the `document_length` an
+`out_of_bounds` error carries.
 
 Two things newcomers reliably get wrong:
 

@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Source;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
@@ -22,7 +23,22 @@ namespace Cosy.Mcp.Tools;
 public record EditRequest(
     [property: JsonPropertyName("file")]     string File,
     [property: JsonPropertyName("span")]     Span Span,
-    [property: JsonPropertyName("new_text")] string NewText);
+    [property: JsonPropertyName("new_text")] string NewText,
+    // Phase 14 D-05/D-06: the text the caller believes currently occupies `span`, compared
+    // ordinally against the document's actual content at that span. A mismatch refuses the
+    // ENTIRE call (nothing stages). Optional (`= null`), per-edit, so a batch may verify some
+    // edits and not others (D-07) — required is a one-way commitment this repo has already
+    // shipped as an incident twice (COSY-0004, COSY-0005): the MCP SDK's schema emitter marks
+    // a parameter required based on the presence of a C# default value, not nullability
+    // (ADR-0006), so omitting `= null` here would put this field in the emitted `required`
+    // array and reject every existing caller above Cosy's own code.
+    [property: JsonPropertyName("expected_text")]
+    [property: Description(
+        "Optional. The text the caller believes currently occupies `span`, compared exactly " +
+        "using ordinal UTF-16 string equality, with no line-ending normalization. A mismatch " +
+        "refuses the entire call and stages nothing, returning expected_text_mismatch with the " +
+        "text actually found at the span.")]
+    string? ExpectedText = null);
 
 // Data payload for apply_edits_verified — lives under envelope.data (ADR-0004 §1).
 // Diagnostics now carry span: {start, end} adjacent to line/column per D-05.
@@ -67,7 +83,12 @@ public sealed class ApplyEditsVerifiedTool
         "and return only net-new diagnostics (baseline-subtracted). Returns a snapshot_id for caller reference. " +
         "No files are written to disk. Requires workspace_open first.")]
     public async Task<object> ApplyAsync(
-        [Description("Edits to apply atomically; each item is {file, span: {start, end}, new_text} with span end exclusive (ADR-0004 §3). Every span is a coordinate in the document as you last read it, NOT in the text left by the other edits in this same call — do not rebase spans against your own earlier edits (ADR-0016). Type is EditRequest[] per ADR-0006: input parameters are statically typed so the MCP-emitted schema is unambiguous to calling agents.")] EditRequest[] edits,
+        [Description("Edits to apply atomically; each item is {file, span: {start, end}, new_text} with span end exclusive (ADR-0004 §3). " +
+            "Every span is a coordinate in the document as you last read it, NOT in the text left by the other edits in this same call — do not rebase spans against your own earlier edits (ADR-0016). " +
+            "Type is EditRequest[] per ADR-0006: input parameters are statically typed so the MCP-emitted schema is unambiguous to calling agents. " +
+            "Span offsets are zero-based, end-exclusive, UTF-16 code unit indices into the document's Roslyn SourceText (ADR-0004 §3) — they must NOT be derived from `wc -c`, `ls -l`, file size, or any encoded byte-stream length. " +
+            "`wc -m` is ALSO wrong: it disagrees with Roslyn on surrogate pairs, so switching from `wc -c` to `wc -m` looks like a fix but is not. " +
+            "A correct offset comes from a span Cosy already emitted (find_text, read_source, read_source_span), a .NET/Roslyn string position, or the document_length returned on an out_of_bounds error.")] EditRequest[] edits,
         [Description("Verification level: 'bind' (default, and currently the only supported value). " +
             "Any other value is rejected with unsupported_option (no silent downgrade).")] string? verify,
         IWorkspaceHost workspaceHost,
@@ -201,6 +222,41 @@ public sealed class ApplyEditsVerifiedTool
                                 new Span(edit.Span.Start, edit.Span.End),
                                 documentLength: text.Length),
                             (int)sw.ElapsedMilliseconds);
+
+                    // Phase 14 D-05/D-06/D-08/D-09: the content check. Ordering is load-bearing —
+                    // this MUST sit after the out_of_bounds check above, because
+                    // text.ToString(TextSpan) throws ArgumentOutOfRangeException on a span past
+                    // text.Length, which would surface as internal_error instead of the clean
+                    // out_of_bounds that already exists. Skip entirely when the caller didn't
+                    // opt in. `text` is this file group's original SourceText, fetched once
+                    // above and never reassigned in this loop (ADR-0016) — comparing against it
+                    // is what keeps the check in the caller's original coordinate system.
+                    if (edit.ExpectedText is not null)
+                    {
+                        var actual = text.ToString(new TextSpan(edit.Span.Start, edit.Span.End - edit.Span.Start));
+                        if (actual != edit.ExpectedText)
+                        {
+                            // Secondary, message-only signal (D-04): normalized equality does
+                            // not imply unnormalized equality — we only reach here on
+                            // inequality, so the two forms can never coincide unnormalized.
+                            var normalizedActual = NormalizeLineEndings(actual);
+                            var normalizedExpected = NormalizeLineEndings(edit.ExpectedText);
+                            var differsOnlyByLineEndings = normalizedActual == normalizedExpected;
+
+                            return Envelope<ApplyEditsVerifiedToolData>.Err(
+                                ToolError.ExpectedTextMismatch(
+                                    fileGroup.Key,
+                                    new Span(edit.Span.Start, edit.Span.End),
+                                    BoundarySnap.TruncateForDisplay(actual),
+                                    differsOnlyByLineEndings),
+                                (int)sw.ElapsedMilliseconds);
+                        }
+                    }
+
+                    // Returning above happens before validated.Add, before baseline diagnostic
+                    // collection, before the apply pass, and before CreateSnapshotAsync, so
+                    // nothing stages and no snapshot is minted — the same shape out_of_bounds
+                    // already has.
                     validated.Add((doc.Id, edit));
                 }
             }
@@ -396,4 +452,13 @@ public sealed class ApplyEditsVerifiedTool
             lease.Dispose();
         }
     }
+
+    /// <summary>
+    /// Phase 14 D-04: a message-only signal, computed AFTER the ordinal mismatch comparison has
+    /// already failed (D-03 — the comparison itself never normalizes). Replaces CRLF with LF
+    /// first, then bare CR with LF, so all three line-ending styles collapse to one form before
+    /// comparison.
+    /// </summary>
+    private static string NormalizeLineEndings(string value) =>
+        value.Replace("\r\n", "\n").Replace('\r', '\n');
 }
