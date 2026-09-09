@@ -45,20 +45,31 @@ public sealed class WorkspaceOpenTool
     [Description(
         "Load a .sln, .slnx, or .csproj file into the resident MSBuildWorkspace and return structured " +
         "load metadata (project count, document count, elapsed ms, WorkspaceFailed diagnostics, " +
-        "and resolved TFM for .csproj loads). Relative paths are resolved against the server's CWD. " +
-        "One workspace at a time: a different-path re-open is rejected with a hint to call " +
-        "workspace_close first.")]
+        "and resolved TFM for .csproj loads). Path must be absolute; relative paths are rejected " +
+        "(see server_cwd in the response, or the error, for why). One workspace at a time: a " +
+        "different-path re-open is rejected with a hint to call workspace_close first.")]
     // Return type is object to sidestep MCP SDK generic-serialization friction; the runtime
     // instance is always Envelope<WorkspaceOpenToolData> and serializes correctly via STJ.
     public async Task<object> OpenAsync(
-        [Description("Absolute or CWD-relative path to a .sln, .slnx, or .csproj file")] string path,
+        [Description("Absolute path to a .sln, .slnx, or .csproj file. Relative paths are rejected " +
+                     "-- this server's cwd does not reliably match your session's directory (e.g. " +
+                     "across git worktrees).")] string path,
         IWorkspaceHost workspaceHost,
         ILogger<WorkspaceOpenTool> logger,
         CancellationToken ct)
     {
-        // 1. Resolve + validate path BEFORE delegating. This keeps the host free of
-        //    filesystem concerns and produces deterministic error messages.
-        var absolutePath = Path.IsPathRooted(path) ? path : Path.GetFullPath(path);
+        // ADR-0022: relative paths are rejected outright, before any filesystem access. This
+        // server's cwd is fixed at launch and is not necessarily the caller's directory (e.g.
+        // inside a git worktree), so resolving against it can silently succeed against the wrong
+        // tree -- rejection removes the hazard instead of just reporting it after the fact.
+        if (!Path.IsPathRooted(path))
+            return Envelope<WorkspaceOpenToolData>.Err(
+                ToolError.InvalidArgument("path", "relative_path_rejected", value: path,
+                    message: $"relative paths are rejected: {path} (pass an absolute path; this " +
+                             $"server's cwd is {Directory.GetCurrentDirectory()} and may not match " +
+                             $"your session's directory, e.g. inside a git worktree)"));
+
+        var absolutePath = path;
 
         // Path-shape validation is user-input error → invalid_argument (D-06).
         if (Directory.Exists(absolutePath))
@@ -68,13 +79,7 @@ public sealed class WorkspaceOpenTool
         if (!File.Exists(absolutePath))
             return Envelope<WorkspaceOpenToolData>.Err(
                 ToolError.InvalidArgument("path", "not_found", value: path,
-                    message: Path.IsPathRooted(path)
-                        ? $"path not found: {path}"
-                        // A RELATIVE path that misses is the worktree trap: it resolved against
-                        // this server's cwd, which the caller may not share. Name both, so the
-                        // failure diagnoses itself instead of reading as "the file is gone".
-                        : $"path not found: {path} (resolved to {absolutePath} against server " +
-                          $"cwd {Directory.GetCurrentDirectory()}; pass an absolute path)"));
+                    message: $"path not found: {path}"));
 
         var ext = Path.GetExtension(absolutePath).ToLowerInvariant();
         if (ext != ".sln" && ext != ".slnx" && ext != ".csproj")

@@ -69,7 +69,7 @@ public sealed class RunTestsTool
         "kind=test_runner_failed or build_failed. Optional timeout_ms kills the subprocess and returns " +
         "partial results parsed from stdout. Requires workspace_open first.")]
     public async Task<object> RunAsync(
-        [Description("Workspace-relative or absolute path to the .csproj or .sln to test.")] string project,
+        [Description("Absolute path to the .csproj or .sln to test. Relative paths are rejected.")] string project,
         IWorkspaceHost workspaceHost,
         ILogger<RunTestsTool> logger,
         [Description("Optional dotnet-test --filter expression (VSTest filter syntax). Silently ignored by MTP-backed projects.")] string? filter = null,
@@ -82,6 +82,10 @@ public sealed class RunTestsTool
         if (string.IsNullOrEmpty(project))
             return Envelope<RunTestsToolData>.Err(
                 ToolError.InvalidArgument("project", "must_not_be_empty", value: project));
+
+        if (!Path.IsPathRooted(project))
+            return Envelope<RunTestsToolData>.Err(
+                ToolError.InvalidArgument("project", "relative_path_rejected", value: project));
 
         if (timeoutMs is int rangeCheck && (rangeCheck < 1 || rangeCheck > 600_000))
             return Envelope<RunTestsToolData>.Err(
