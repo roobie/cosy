@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
@@ -47,9 +48,13 @@ public sealed class CheckSnapshotTool
         "the net-new warnings/errors a commit would introduce. Does NOT write to disk or alter the " +
         "ring. Unknown/evicted id returns error.kind=snapshot_not_found.")]
     public async Task<object> CheckAsync(
-        [Description("The 8-char hex snapshot id to check.")] string snapshotId,
         IWorkspaceHost workspaceHost,
         ILogger<CheckSnapshotTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null); this file already ended
+        // in a defaulted `ct`, so this is the simplest move in the plan -- one parameter, no
+        // second-order compile trap. [CosyRequired] is the sole remaining requiredness signal.
+        [CosyRequired]
+        [Description("The 8-char hex snapshot id to check.")] string? snapshotId = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(snapshotId))

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Symbols;
 using Cosy.Mcp.Workspace;
@@ -57,16 +58,26 @@ public sealed class RenameTool
         "post-rename diagnostics and a findings array for known Renamer miss bugs. " +
         "Requires workspace_open first. dry_run must be true.")]
     public async Task<object> RenameAsync(
-        [Description("DocumentationCommentId of the symbol to rename (e.g. M:Ns.Type.Method(System.String)). " +
-            "Accepts a DocumentationCommentId (preferred) or a fuzzy name; multi-match returns is_error:true with candidates.")] string symbol,
-        [Description("New name for the symbol")] string newName,
-        [Description("Must be true; false is not supported in spike")] bool dryRun,
         IWorkspaceHost workspaceHost,
         FuzzySymbolResolver resolver,
         ILogger<RenameTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params --
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal for symbol,
+        // new_name and dry_run.
+        [CosyRequired]
+        [Description("DocumentationCommentId of the symbol to rename (e.g. M:Ns.Type.Method(System.String)). " +
+            "Accepts a DocumentationCommentId (preferred) or a fuzzy name; multi-match returns is_error:true with candidates.")] string? symbol = null,
+        [CosyRequired]
+        [Description("New name for the symbol")] string? newName = null,
+        [CosyRequired]
+        [Description("Must be true; false is not supported in spike")] bool? dryRun = null,
         [Description("Max diagnostic rows to echo in data.diagnostics (default 500). Edits are always returned in full.")] int? max = null,
         CancellationToken ct = default)
     {
+        // ArgumentGuard rejects an absent/null symbol (CosyRequired) before this handler ever
+        // runs -- this binding is a compiler satisfaction only, not a second requiredness check.
+        var symbolText = symbol!;
+
         // Read lease blocks workspace_close from disposing the workspace while we hold a
         // captured snapshot (ADR-0005 §D-06). Lease lifetime covers the entire method body.
         using var lease = workspaceHost.RentSolution(out var solution);
@@ -78,7 +89,12 @@ public sealed class RenameTool
                 ToolError.InvalidArgument("max", "out_of_range_1_to_10000", value: max));
         var cap = max ?? 500;
 
-        if (!dryRun)
+        // Phase 12.3: guard tests for the affirmative value (dryRun != true) rather than negating
+        // dryRun, so absent/null and false both refuse and only an explicit true proceeds --
+        // ArgumentGuard's dispatch-boundary check now answers "required" for the absent/null case
+        // before this handler ever runs; this branch is reached only when dryRun is present, and
+        // its false-branch answer (internal_error) stays byte-identical to before this phase.
+        if (dryRun != true)
             // TODO(Plan 05/06): ToolError.InvalidArgument kind for dry_run.
             return Envelope<RenameToolData>.Err(ToolError.Internal(new Exception("dry_run=false not supported in spike")));
 
@@ -95,14 +111,14 @@ public sealed class RenameTool
                     value: newName));
         }
 
-        logger.LogDebug("rename: symbol={Symbol}, new_name={NewName}", symbol, newName);
+        logger.LogDebug("rename: symbol={Symbol}, new_name={NewName}", symbolText, newName);
 
         var sw = Stopwatch.StartNew();
 
         try
         {
             // --- SYMBOL RESOLUTION (D-01, D-02, D-03) ---
-            var resolved = await resolver.ResolveAsync(symbol, solution, ct);
+            var resolved = await resolver.ResolveAsync(symbolText, solution, ct);
             ISymbol targetSymbol;
             switch (resolved)
             {
@@ -110,10 +126,10 @@ public sealed class RenameTool
                     targetSymbol = m.Symbol;
                     break;
                 case ResolveResult.AmbiguousMatches a:
-                    logger.LogWarning("rename: ambiguous symbol: {Symbol} ({Count} candidates)", symbol, a.TopN.Count);
+                    logger.LogWarning("rename: ambiguous symbol: {Symbol} ({Count} candidates)", symbolText, a.TopN.Count);
                     // D-11: structured ambiguous error with candidate DTOs.
                     return Envelope<RenameToolData>.Err(
-                        ToolError.AmbiguousSymbol(query: symbol, candidates: a.TopN.ToDtos()),
+                        ToolError.AmbiguousSymbol(query: symbolText, candidates: a.TopN.ToDtos()),
                         (int)sw.ElapsedMilliseconds);
                 case ResolveResult.NoMatch n:
                     logger.LogWarning("rename: symbol not found: {Symbol}", n.Query);

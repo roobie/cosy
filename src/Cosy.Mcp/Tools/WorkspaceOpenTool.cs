@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Workspace;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -51,40 +52,52 @@ public sealed class WorkspaceOpenTool
     // Return type is object to sidestep MCP SDK generic-serialization friction; the runtime
     // instance is always Envelope<WorkspaceOpenToolData> and serializes correctly via STJ.
     public async Task<object> OpenAsync(
-        [Description("Absolute path to a .sln, .slnx, or .csproj file. Relative paths are rejected " +
-                     "-- this server's cwd does not reliably match your session's directory (e.g. " +
-                     "across git worktrees).")] string path,
         IWorkspaceHost workspaceHost,
         ILogger<WorkspaceOpenTool> logger,
-        CancellationToken ct)
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal.
+        [CosyRequired]
+        [Description("Absolute path to a .sln, .slnx, or .csproj file. Relative paths are rejected " +
+                     "-- this server's cwd does not reliably match your session's directory (e.g. " +
+                     "across git worktrees).")] string? path = null,
+        // Phase 12.3 D-12/second-order compile trap: this tool is the ONLY one of the 13 where
+        // moving the tool parameter after the DI block puts it before a trailing CancellationToken
+        // that previously had no default -- without `= default` here, CS1737 recurs on this file
+        // specifically (RESEARCH.md confirmed by reading all 18 signatures). WorkspaceCloseTool's
+        // own bare `ct` is left untouched: nothing moves past it there, so it carries no such risk.
+        CancellationToken ct = default)
     {
+        // ArgumentGuard rejects an absent/null path (CosyRequired) before this handler ever runs
+        // -- this binding is a compiler satisfaction only, not a second requiredness check.
+        var pathText = path!;
+
         // ADR-0022: relative paths are rejected outright, before any filesystem access. This
         // server's cwd is fixed at launch and is not necessarily the caller's directory (e.g.
         // inside a git worktree), so resolving against it can silently succeed against the wrong
         // tree -- rejection removes the hazard instead of just reporting it after the fact.
-        if (!Path.IsPathRooted(path))
+        if (!Path.IsPathRooted(pathText))
             return Envelope<WorkspaceOpenToolData>.Err(
-                ToolError.InvalidArgument("path", "relative_path_rejected", value: path,
-                    message: $"relative paths are rejected: {path} (pass an absolute path; this " +
+                ToolError.InvalidArgument("path", "relative_path_rejected", value: pathText,
+                    message: $"relative paths are rejected: {pathText} (pass an absolute path; this " +
                              $"server's cwd is {Directory.GetCurrentDirectory()} and may not match " +
                              $"your session's directory, e.g. inside a git worktree)"));
 
-        var absolutePath = path;
+        var absolutePath = pathText;
 
         // Path-shape validation is user-input error → invalid_argument (D-06).
         if (Directory.Exists(absolutePath))
             return Envelope<WorkspaceOpenToolData>.Err(
-                ToolError.InvalidArgument("path", "is_directory", value: path,
-                    message: $"expected .sln or .csproj file, got directory: {path}"));
+                ToolError.InvalidArgument("path", "is_directory", value: pathText,
+                    message: $"expected .sln or .csproj file, got directory: {pathText}"));
         if (!File.Exists(absolutePath))
             return Envelope<WorkspaceOpenToolData>.Err(
-                ToolError.InvalidArgument("path", "not_found", value: path,
-                    message: $"path not found: {path}"));
+                ToolError.InvalidArgument("path", "not_found", value: pathText,
+                    message: $"path not found: {pathText}"));
 
         var ext = Path.GetExtension(absolutePath).ToLowerInvariant();
         if (ext != ".sln" && ext != ".slnx" && ext != ".csproj")
             return Envelope<WorkspaceOpenToolData>.Err(
-                ToolError.InvalidArgument("path", "unsupported_extension", value: path,
+                ToolError.InvalidArgument("path", "unsupported_extension", value: pathText,
                     message: $"expected .sln, .slnx, or .csproj, got: {ext}"));
 
         // 2. Delegate to the singleton host.

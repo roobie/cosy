@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Refactor;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Workspace;
@@ -67,25 +68,44 @@ public sealed class ExtractMethodTool
         "into a single snapshot (deferred-promote), and returns the edit set plus baseline-subtracted " +
         "post-extract diagnostics. Requires workspace_open first. dryRun must be true.")]
     public async Task<object> ExtractAsync(
-        [Description("Relative or absolute file path; suffix-matched against the workspace documents (one-and-only-one match required).")] string file,
+        IWorkspaceHost workspaceHost,
+        ILogger<ExtractMethodTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params --
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal for file, span,
+        // new_method_name and dry_run. span is Cosy.Mcp.Contracts.Span, a sealed record (reference
+        // type), so it takes the ordinary nullable treatment -- only dryRun's non-nullable-value-
+        // type trap forces a guard rewrite.
+        [CosyRequired]
+        [Description("Relative or absolute file path; suffix-matched against the workspace documents (one-and-only-one match required).")] string? file = null,
+        [CosyRequired]
         [Description("Extract span as {start, end} zero-based, end-exclusive UTF-16 code unit " +
             "offsets into the document's Roslyn SourceText (ADR-0004 §3) -- never byte offsets " +
             "from wc -c or ls -l, and wc -m is also wrong since it disagrees with SourceText on " +
-            "surrogate pairs; see ADR-0004 §3 for where a correct offset comes from.")] Span span,
-        [Description("Name of the new method. Must be a valid C# identifier.")] string newMethodName,
-        [Description("Must be true; false is not supported in spike (RenameTool precedent).")] bool dryRun,
-        IWorkspaceHost workspaceHost,
-        ILogger<ExtractMethodTool> logger,
+            "surrogate pairs; see ADR-0004 §3 for where a correct offset comes from.")] Span? span = null,
+        [CosyRequired]
+        [Description("Name of the new method. Must be a valid C# identifier.")] string? newMethodName = null,
+        [CosyRequired]
+        [Description("Must be true; false is not supported in spike (RenameTool precedent).")] bool? dryRun = null,
         [Description("Optional snapshot id to chain extract off of (ADR-0007 §1.2). Defaults to CurrentSolution.")] string? fromSnapshotId = null,
         [Description("Optional timeout in milliseconds; linked to caller CancellationToken.")] int? timeoutMs = null,
         CancellationToken ct = default)
     {
         // --- ARG VALIDATION (no workspace access required) ---
 
+        // ArgumentGuard rejects an absent/null file/span (CosyRequired) before this handler ever
+        // runs -- these bindings are compiler satisfaction only, not a second requiredness check.
+        var fileText = file!;
+        var spanValue = span!;
+
         // RenameTool precedent: dryRun=false rejected as invalid_argument. The wire arg
         // name is "dryRun" (camelCase per Phase 9 D-04); error details param key follows
-        // snake_case wire-key convention.
-        if (!dryRun)
+        // snake_case wire-key convention. Phase 12.3: guard tests for the affirmative value
+        // (dryRun != true) rather than negating dryRun, so absent/null and false both refuse
+        // and only an explicit true proceeds -- ArgumentGuard's dispatch-boundary check now
+        // answers "required" for the absent/null case before this handler ever runs; this
+        // branch is reached only when dryRun is present, and its false-branch answer
+        // (invalid_argument/must_be_true) stays byte-identical to before this phase.
+        if (dryRun != true)
         {
             return Envelope<ExtractMethodResult>.Err(
                 ToolError.InvalidArgument(param: "dry_run", reason: "must_be_true", value: dryRun));
@@ -107,7 +127,7 @@ public sealed class ExtractMethodTool
         var opCt = linkedCts.Token;
 
         logger.LogDebug("extract_method: file={File}, span={Start}..{End}, new_method_name={Name}",
-            file, span.Start, span.End, newMethodName);
+            fileText, spanValue.Start, spanValue.End, newMethodName);
 
         var sw = Stopwatch.StartNew();
 
@@ -138,35 +158,35 @@ public sealed class ExtractMethodTool
             var matches = baseSolution.Projects
                 .SelectMany(p => p.Documents)
                 .Where(d => d.FilePath != null &&
-                            d.FilePath.EndsWith(file, StringComparison.OrdinalIgnoreCase))
+                            d.FilePath.EndsWith(fileText, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (matches.Count == 0)
             {
                 return Envelope<ExtractMethodResult>.Err(
-                    ToolError.InvalidArgument("file", "not_found_in_workspace", value: file),
+                    ToolError.InvalidArgument("file", "not_found_in_workspace", value: fileText),
                     (int)sw.ElapsedMilliseconds);
             }
             if (matches.Count > 1)
             {
                 return Envelope<ExtractMethodResult>.Err(
-                    ToolError.InvalidArgument("file", "ambiguous_path", value: file,
-                        message: $"ambiguous file path: {file} matches {matches.Count} documents"),
+                    ToolError.InvalidArgument("file", "ambiguous_path", value: fileText,
+                        message: $"ambiguous file path: {fileText} matches {matches.Count} documents"),
                     (int)sw.ElapsedMilliseconds);
             }
             var document = matches[0];
 
             // --- SPAN VALIDATION (AEV precedent lines 190-204) ---
             var sourceText = await document.GetTextAsync(opCt);
-            if (span.Start < 0 || span.End < span.Start)
+            if (spanValue.Start < 0 || spanValue.End < spanValue.Start)
             {
                 return Envelope<ExtractMethodResult>.Err(
-                    ToolError.InvalidArgument("span", "inverted_or_negative", value: span),
+                    ToolError.InvalidArgument("span", "inverted_or_negative", value: spanValue),
                     (int)sw.ElapsedMilliseconds);
             }
-            if (span.End > sourceText.Length)
+            if (spanValue.End > sourceText.Length)
             {
                 return Envelope<ExtractMethodResult>.Err(
-                    ToolError.OutOfBounds(file, span, sourceText.Length),
+                    ToolError.OutOfBounds(fileText, spanValue, sourceText.Length),
                     (int)sw.ElapsedMilliseconds);
             }
 
@@ -176,7 +196,7 @@ public sealed class ExtractMethodTool
                 return Envelope<ExtractMethodResult>.Err(
                     ToolError.UnsupportedOption(
                         param: "file",
-                        requested: file,
+                        requested: fileText,
                         supported: new[] { "non_generated_files_only" }),
                     (int)sw.ElapsedMilliseconds);
             }
@@ -197,7 +217,7 @@ public sealed class ExtractMethodTool
             }
 
             // --- ROSLYN INVOCATION ---
-            var textSpan = new TextSpan(span.Start, span.End - span.Start);
+            var textSpan = new TextSpan(spanValue.Start, spanValue.End - spanValue.Start);
             Solution editedSolution;
             string actionTitle;
             var outcome = await ExtractMethodInvoker.InvokeAsync(document, textSpan, opCt);
@@ -208,7 +228,7 @@ public sealed class ExtractMethodTool
                     return Envelope<ExtractMethodResult>.Err(
                         ToolError.UnsupportedOption(
                             param: "span",
-                            requested: $"extract_at_{span.Start}_{span.End}",
+                            requested: $"extract_at_{spanValue.Start}_{spanValue.End}",
                             supported: new[] { "roslyn_compatible_extract_span" }),
                         (int)sw.ElapsedMilliseconds);
                 case ExtractInvocationOutcome.Success success:
@@ -373,7 +393,7 @@ public sealed class ExtractMethodTool
             var data = new ExtractMethodResult(
                 SnapshotId: snapshotId,
                 Edits: edits,
-                OriginalSpan: span,
+                OriginalSpan: spanValue,
                 PostExtractDiagnostics: postExtractDiagnostics,
                 ActionTitle: actionTitle);
             return Envelope<ExtractMethodResult>.Ok(data, elapsedMs);

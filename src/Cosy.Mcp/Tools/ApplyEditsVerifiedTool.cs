@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Source;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
@@ -30,7 +31,7 @@ public record EditRequest(
     // edits and not others (D-07) — required is a one-way commitment this repo has already
     // shipped as an incident twice (COSY-0004, COSY-0005): the MCP SDK's schema emitter marks
     // a parameter required based on the presence of a C# default value, not nullability
-    // (ADR-0006), so omitting `= null` here would put this field in the emitted `required`
+    // (ADR-0023), so omitting `= null` here would put this field in the emitted `required`
     // array and reject every existing caller above Cosy's own code.
     [property: JsonPropertyName("expected_text")]
     [property: Description(
@@ -83,16 +84,24 @@ public sealed class ApplyEditsVerifiedTool
         "and return only net-new diagnostics (baseline-subtracted). Returns a snapshot_id for caller reference. " +
         "No files are written to disk. Requires workspace_open first.")]
     public async Task<object> ApplyAsync(
+        IWorkspaceHost workspaceHost,
+        ILogger<ApplyEditsVerifiedTool> logger,
+        // Phase 12.3 D-01/D-13: every tool parameter is schema-optional now (nullable + = null,
+        // moved after the DI params — CS1737, D-12); [CosyRequired] below is the sole remaining
+        // requiredness signal, advisory in the emitted description and enforced by ArgumentGuard.
+        [CosyRequired]
         [Description("Edits to apply atomically; each item is {file, span: {start, end}, new_text} with span end exclusive (ADR-0004 §3). " +
             "Every span is a coordinate in the document as you last read it, NOT in the text left by the other edits in this same call — do not rebase spans against your own earlier edits (ADR-0016). " +
             "Type is EditRequest[] per ADR-0006: input parameters are statically typed so the MCP-emitted schema is unambiguous to calling agents. " +
             "Span offsets are zero-based, end-exclusive, UTF-16 code unit indices into the document's Roslyn SourceText (ADR-0004 §3) — they must NOT be derived from `wc -c`, `ls -l`, file size, or any encoded byte-stream length. " +
             "`wc -m` is ALSO wrong: it disagrees with Roslyn on surrogate pairs, so switching from `wc -c` to `wc -m` looks like a fix but is not. " +
-            "A correct offset comes from a span Cosy already emitted (find_text, read_source, read_source_span), a .NET/Roslyn string position, or the document_length returned on an out_of_bounds error.")] EditRequest[] edits,
+            "A correct offset comes from a span Cosy already emitted (find_text, read_source, read_source_span), a .NET/Roslyn string position, or the document_length returned on an out_of_bounds error.")] EditRequest[]? edits = null,
+        // Deliberately NOT [CosyRequired]: schema-required today only by the accident this phase
+        // exists to fix (D-12). The handler already treats an omitted verify as "bind" (below);
+        // marking it would move the rejection from the schema into ArgumentGuard rather than
+        // removing it, defeating SC-1 and the edits-only success this phase's own facts assert.
         [Description("Verification level: 'bind' (default, and currently the only supported value). " +
-            "Any other value is rejected with unsupported_option (no silent downgrade).")] string? verify,
-        IWorkspaceHost workspaceHost,
-        ILogger<ApplyEditsVerifiedTool> logger,
+            "Any other value is rejected with unsupported_option (no silent downgrade).")] string? verify = null,
         [Description("Max edit rows to echo in data.edits (default 500). Edits are applied atomically regardless; this only bounds the echoed list.")] int? max = null,
         // Wire name is camelCase ("fromSnapshotId") to match existing tool input conventions —
         // the MCP SDK uses ParameterInfo.Name directly; ADR-0004 §2 snake_case applies to

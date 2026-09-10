@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -51,14 +52,26 @@ public sealed class CompileCheckTool
         "Caller is responsible for 'using' directives -- no usings are auto-propagated. " +
         "Does not modify the workspace or write to disk. Requires workspace_open first.")]
     public async Task<object> CheckAsync(
-        [Description("C# source snippet. May be a compilation unit, a class member, or a bare method body.")] string snippet,
-        [Description("Optional project name or file-path suffix to bind against. Default: solution.Projects.First(). " +
-                     "Resolution order: exact Name match, FilePath suffix match, case-insensitive Name match.")] string? project,
         IWorkspaceHost workspaceHost,
         ILogger<CompileCheckTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal for snippet.
+        [CosyRequired]
+        [Description("C# source snippet. May be a compilation unit, a class member, or a bare method body.")] string? snippet = null,
+        // Deliberately NOT [CosyRequired] (D-14 anchor 2): this description already said
+        // "Optional ... Default: solution.Projects.First()" while the schema said required —
+        // the second confirmed instance of the phase's own named defect. The handler already
+        // resolves a null project to the default via ResolveProject below; marking it would
+        // keep rejecting an omitted project, only with better wording.
+        [Description("Optional project name or file-path suffix to bind against. Default: solution.Projects.First(). " +
+                     "Resolution order: exact Name match, FilePath suffix match, case-insensitive Name match.")] string? project = null,
         [Description("Optional timeout in milliseconds (1..600000). If exceeded, the tool returns via cancellation.")] int? timeoutMs = null,
         CancellationToken ct = default)
     {
+        // ArgumentGuard rejects an absent/null snippet (CosyRequired) before this handler ever
+        // runs -- this binding is a compiler satisfaction only, not a second requiredness check.
+        var snippetText = snippet!;
+
         // Read lease blocks workspace_close from disposing the workspace while we hold a
         // captured snapshot (ADR-0005 §D-06). Lease lifetime covers the entire method body.
         using var lease = workspaceHost.RentSolution(out var solution);
@@ -73,7 +86,7 @@ public sealed class CompileCheckTool
                     message: $"project '{project}' not found. Valid projects: {string.Join(", ", solution.Projects.Select(p => p.Name))}"));
 
         logger.LogDebug("compile_check: snippet length={Length}, project={Project}, timeoutMs={TimeoutMs}",
-            snippet.Length, targetProject.Name, timeoutMs);
+            snippetText.Length, targetProject.Name, timeoutMs);
 
         // D-15: compose caller CT with optional timeout via linked CTS.
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -93,7 +106,7 @@ public sealed class CompileCheckTool
             var parseOptions = (CSharpParseOptions?)targetProject.ParseOptions;
 
             // Parse the raw snippet to check if it's a valid compilation unit.
-            var rawTree = CSharpSyntaxTree.ParseText(snippet, parseOptions, path: "snippet.cs", cancellationToken: effectiveCt);
+            var rawTree = CSharpSyntaxTree.ParseText(snippetText, parseOptions, path: "snippet.cs", cancellationToken: effectiveCt);
             var rawParseErrors = rawTree.GetDiagnostics(effectiveCt)
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .ToArray();
@@ -109,7 +122,7 @@ public sealed class CompileCheckTool
                 const string wrapPrefix = "class __CosySnippet { void __M() { ";
                 const string wrapSuffix = " } }";
 
-                var wrappedSource = wrapPrefix + snippet + wrapSuffix;
+                var wrappedSource = wrapPrefix + snippetText + wrapSuffix;
                 var wrappedTree = CSharpSyntaxTree.ParseText(wrappedSource, parseOptions, path: "snippet.cs", cancellationToken: effectiveCt);
                 var wrappedParseErrors = wrappedTree.GetDiagnostics(effectiveCt)
                     .Count(d => d.Severity == DiagnosticSeverity.Error);

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Symbols;
 using Cosy.Mcp.Workspace;
@@ -47,15 +48,22 @@ public sealed class ListImplementationsTool
         "Capped at max items (default 500); envelope carries truncated and total_count. " +
         "Requires workspace_open first.")]
     public async Task<object> ListAsync(
-        [Description("Symbol to locate — DocumentationCommentId (preferred, e.g. T:Ns.IFoo or " +
-            "M:Ns.IFoo.Bar(System.String)) or a partial name the fuzzy resolver can route.")] string symbol,
         IWorkspaceHost workspaceHost,
         FuzzySymbolResolver resolver,
         ILogger<ListImplementationsTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal.
+        [CosyRequired]
+        [Description("Symbol to locate — DocumentationCommentId (preferred, e.g. T:Ns.IFoo or " +
+            "M:Ns.IFoo.Bar(System.String)) or a partial name the fuzzy resolver can route.")] string? symbol = null,
         [Description("Max items to return (default 500).")] int? max = null,
         [Description("Optional timeout in milliseconds (1..600000). If exceeded, the tool returns via cancellation.")] int? timeoutMs = null,
         CancellationToken ct = default)
     {
+        // ArgumentGuard rejects an absent/null symbol (CosyRequired) before this handler ever
+        // runs -- this binding is a compiler satisfaction only, not a second requiredness check.
+        var symbolText = symbol!;
+
         // Read lease blocks workspace_close from disposing the workspace while we hold a
         // captured snapshot (ADR-0005 §D-06). Lease lifetime covers the entire method body.
         using var lease = workspaceHost.RentSolution(out var solution);
@@ -66,7 +74,7 @@ public sealed class ListImplementationsTool
             return Envelope<ListImplementationsToolData>.Err(
                 ToolError.InvalidArgument("max", "out_of_range_1_to_10000", value: max));
 
-        logger.LogDebug("list_implementations: symbol={Symbol}, max={Max}, timeoutMs={TimeoutMs}", symbol, max, timeoutMs);
+        logger.LogDebug("list_implementations: symbol={Symbol}, max={Max}, timeoutMs={TimeoutMs}", symbolText, max, timeoutMs);
 
         var sw = Stopwatch.StartNew();
 
@@ -83,7 +91,7 @@ public sealed class ListImplementationsTool
         try
         {
             // --- SYMBOL RESOLUTION (D-01, D-04, D-05, D-06) ---
-            var resolved = await resolver.ResolveAsync(symbol, solution, effectiveCt);
+            var resolved = await resolver.ResolveAsync(symbolText, solution, effectiveCt);
             ISymbol targetSymbol;
             switch (resolved)
             {
@@ -91,10 +99,10 @@ public sealed class ListImplementationsTool
                     targetSymbol = m.Symbol;
                     break;
                 case ResolveResult.AmbiguousMatches a:
-                    logger.LogWarning("list_implementations: ambiguous symbol: {Symbol} ({Count} candidates)", symbol, a.TopN.Count);
+                    logger.LogWarning("list_implementations: ambiguous symbol: {Symbol} ({Count} candidates)", symbolText, a.TopN.Count);
                     // D-11: structured ambiguous error with candidate DTOs.
                     return Envelope<ListImplementationsToolData>.Err(
-                        ToolError.AmbiguousSymbol(query: symbol, candidates: a.TopN.ToDtos()),
+                        ToolError.AmbiguousSymbol(query: symbolText, candidates: a.TopN.ToDtos()),
                         (int)sw.ElapsedMilliseconds);
                 case ResolveResult.NoMatch n:
                     logger.LogWarning("list_implementations: symbol not found: {Symbol}", n.Query);

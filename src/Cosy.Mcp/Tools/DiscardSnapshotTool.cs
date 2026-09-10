@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Workspace;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -29,11 +30,15 @@ public sealed class DiscardSnapshotTool
         "transitively), they are also evicted. Returns the list of evicted ids. On unknown id " +
         "(including ring-evicted) returns error.kind=snapshot_not_found.")]
     public async Task<object> DiscardAsync(
-        // Wire-name parameter convention: see CommitSnapshotTool comment. Callers pass
-        // `snapshotId` (camelCase) on the wire to match the C# parameter name.
-        [Description("The 8-char hex snapshot id to evict.")] string snapshotId,
         IWorkspaceHost workspaceHost,
         ILogger<DiscardSnapshotTool> logger,
+        // Wire-name parameter convention: see CommitSnapshotTool comment. Callers pass
+        // `snapshotId` (camelCase) on the wire to match the C# parameter name.
+        //
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal.
+        [CosyRequired]
+        [Description("The 8-char hex snapshot id to evict.")] string? snapshotId = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(snapshotId))

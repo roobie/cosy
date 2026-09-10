@@ -74,6 +74,20 @@ public sealed record ToolError(
         => new(ToolErrorKind.InvalidArgument, binderMessage,
                new InvalidArgumentDetails("arguments", "binding_failed", null, accepted));
 
+    /// <summary>
+    /// Phase 12.3, D-04/D-07: the arguments carried a key the tool does not declare at all. Once
+    /// D-01 makes every parameter schema-optional, this is what prevents a supposed argument name
+    /// from binding nothing and being silently dropped — the measured corpus defect
+    /// (2026-09-05-agent-supposed-argument-names-fail-silently.md) this phase closes. Follows
+    /// <see cref="MissingRequiredArgument"/>'s exact shape, including passing
+    /// <paramref name="accepted"/> explicitly — <c>OrdinaryInvalidArgument_DoesNotCarryAccepted</c>
+    /// pins that ordinary invalid_argument emissions must NOT carry it, so this factory is
+    /// deliberately in the other class alongside MissingRequiredArgument/ArgumentBindingFailed.
+    /// </summary>
+    public static ToolError UnknownArgument(string param, IReadOnlyList<string> accepted)
+        => new(ToolErrorKind.InvalidArgument, $"{param}: unknown_argument",
+               new InvalidArgumentDetails(param, "unknown_argument", null, accepted));
+
     public static ToolError UnsupportedOption(string param, string requested, IReadOnlyList<string> supported)
         => new(ToolErrorKind.UnsupportedOption, $"{param}='{requested}' not supported",
                new UnsupportedOptionDetails(param, requested, supported));

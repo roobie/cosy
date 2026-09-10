@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Source;
 using Cosy.Mcp.Symbols;
@@ -111,11 +112,14 @@ public sealed class ReadSourceTool
         "instead of the current workspace state; data.read_snapshot_id echoes which base answered " +
         "(the supplied id, or explicit null for the current state). Requires workspace_open first.")]
     public async Task<object> GetAsync(
-        [Description("Symbol to read -- DocumentationCommentId (preferred, e.g. M:Ns.Type.Method) " +
-            "or a partial name that the fuzzy resolver can route to a symbol.")] string symbol,
         IWorkspaceHost workspaceHost,
         FuzzySymbolResolver resolver,
         ILogger<ReadSourceTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal.
+        [CosyRequired]
+        [Description("Symbol to read -- DocumentationCommentId (preferred, e.g. M:Ns.Type.Method) " +
+            "or a partial name that the fuzzy resolver can route to a symbol.")] string? symbol = null,
         [Description("Max declaration sites to return (default 500). Lower to bound response size; higher to raise the cap.")] int? max = null,
         [Description("Max characters of text per declaration site (default 8000, range 500..200000). " +
             "A real ceiling: the returned text is never longer, and the cut is snapped back to a " +
@@ -125,6 +129,10 @@ public sealed class ReadSourceTool
         [Description("Optional snapshot id to read on top of (ADR-0007 §1.2), instead of the current workspace state. Defaults to the current solution when absent.")] string? fromSnapshotId = null,
         CancellationToken ct = default)
     {
+        // ArgumentGuard rejects an absent/null symbol (CosyRequired) before this handler ever
+        // runs -- this binding is a compiler satisfaction only, not a second requiredness check.
+        var symbolText = symbol!;
+
         // --- ARGUMENT VALIDATION (cheap first, before any workspace access) ---
         if (max is not null && (max < 1 || max > 10000))
             return Envelope<ReadSourceToolData>.Err(
@@ -175,7 +183,7 @@ public sealed class ReadSourceTool
         }
 
         logger.LogDebug("read_source: symbol={Symbol}, max={Max}, timeoutMs={TimeoutMs}, fromSnapshotId={FromSnapshotId}",
-            symbol, max, timeoutMs, fromSnapshotId);
+            symbolText, max, timeoutMs, fromSnapshotId);
 
         var sw = Stopwatch.StartNew();
 
@@ -186,7 +194,7 @@ public sealed class ReadSourceTool
         try
         {
             // --- SYMBOL RESOLUTION against the BASE solution (D-08, SC-3) ---
-            var resolved = await resolver.ResolveAsync(symbol, baseSolution, effectiveCt);
+            var resolved = await resolver.ResolveAsync(symbolText, baseSolution, effectiveCt);
             ISymbol targetSymbol;
             switch (resolved)
             {
@@ -194,9 +202,9 @@ public sealed class ReadSourceTool
                     targetSymbol = m.Symbol;
                     break;
                 case ResolveResult.AmbiguousMatches a:
-                    logger.LogWarning("read_source: ambiguous symbol: {Symbol} ({Count} candidates)", symbol, a.TopN.Count);
+                    logger.LogWarning("read_source: ambiguous symbol: {Symbol} ({Count} candidates)", symbolText, a.TopN.Count);
                     return Envelope<ReadSourceToolData>.Err(
-                        ToolError.AmbiguousSymbol(query: symbol, candidates: a.TopN.ToDtos()),
+                        ToolError.AmbiguousSymbol(query: symbolText, candidates: a.TopN.ToDtos()),
                         (int)sw.ElapsedMilliseconds);
                 case ResolveResult.NoMatch n:
                     logger.LogWarning("read_source: symbol not found: {Symbol}", n.Query);
@@ -211,14 +219,14 @@ public sealed class ReadSourceTool
             // Both are post-resolution checks on the symbol the resolver already returned; neither
             // touches FuzzySymbolResolver (D-04's guard is explicitly NOT a resolver-side filter --
             // ResolveAsync stays byte-identical for the three other tools that share the singleton).
-            var symbolId = targetSymbol.GetDocumentationCommentId() ?? symbol;
+            var symbolId = targetSymbol.GetDocumentationCommentId() ?? symbolText;
 
             // D-04: a synthesized symbol (e.g. a compiler-generated backing member) has no real
             // declaration to read, even though it resolved. Guarding on IsImplicitlyDeclared here
             // (not in the resolver) keeps this specific to read_source's contract.
             if (targetSymbol.IsImplicitlyDeclared)
             {
-                logger.LogWarning("read_source: no source available (implicitly declared): {Symbol}", symbol);
+                logger.LogWarning("read_source: no source available (implicitly declared): {Symbol}", symbolText);
                 return Envelope<ReadSourceToolData>.Err(
                     ToolError.NoSourceAvailable(symbolId, targetSymbol.ContainingAssembly?.Name),
                     (int)sw.ElapsedMilliseconds);
@@ -240,7 +248,7 @@ public sealed class ReadSourceTool
             // wrong" apart from "the source is not here".
             if (allRefs.Count == 0)
             {
-                logger.LogWarning("read_source: no source available (zero syntax references): {Symbol}", symbol);
+                logger.LogWarning("read_source: no source available (zero syntax references): {Symbol}", symbolText);
                 return Envelope<ReadSourceToolData>.Err(
                     ToolError.NoSourceAvailable(symbolId, targetSymbol.ContainingAssembly?.Name),
                     (int)sw.ElapsedMilliseconds);

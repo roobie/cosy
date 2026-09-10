@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Workspace;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -27,15 +28,22 @@ public sealed class CommitSnapshotTool
         "and evict it from the snapshot ring. On disk-mtime mismatch returns error.kind=disk_conflict; on " +
         "unknown id (including ring-evicted) returns error.kind=snapshot_not_found.")]
     public async Task<object> CommitAsync(
+        IWorkspaceHost workspaceHost,
+        ILogger<CommitSnapshotTool> logger,
         // Wire-name parameter convention: the MCP SDK does NOT snake_case-fold C# parameter
         // names (see ApplyEditsVerifiedTests note on fromSnapshotId — same SDK behaviour).
         // Hence callers pass `snapshotId` (camelCase) on the wire, matching the C# parameter
         // name verbatim. The RESPONSE-side wire key `snapshot_id` is controlled by
         // JsonPropertyName on the details record (SnapshotNotFoundDetails); the two
         // conventions are independent.
-        [Description("The 8-char hex snapshot id returned by apply_edits_verified.")] string snapshotId,
-        IWorkspaceHost workspaceHost,
-        ILogger<CommitSnapshotTool> logger,
+        //
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal. The existing
+        // string.IsNullOrEmpty(snapshotId) check below is [NotNullWhen(false)]-annotated, so it
+        // narrows snapshotId for the rest of this method once ArgumentGuard has already rejected
+        // an absent/null snapshotId before dispatch.
+        [CosyRequired]
+        [Description("The 8-char hex snapshot id returned by apply_edits_verified.")] string? snapshotId = null,
         CancellationToken ct = default)
     {
         // Argument validation: empty/null snapshot_id is rejected with invalid_argument BEFORE

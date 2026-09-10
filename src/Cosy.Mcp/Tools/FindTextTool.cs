@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Workspace;
 using Microsoft.CodeAnalysis;
@@ -79,9 +80,15 @@ public sealed class FindTextTool
         "symbols (e.g. the non-selected side of an #if TFM check), these two fields may not " +
         "reflect the token's live semantic identity. Requires workspace_open first.")]
     public async Task<object> FindAsync(
-        [Description("Literal text to search for, or a .NET regex pattern when regex:true. Required, non-empty.")] string pattern,
         IWorkspaceHost workspaceHost,
         ILogger<FindTextTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal. The existing
+        // string.IsNullOrEmpty(pattern) check below is [NotNullWhen(false)]-annotated, so it
+        // narrows pattern for the rest of this method once ArgumentGuard's own check has already
+        // rejected an absent/null pattern before dispatch -- no separate null-forgiveness needed.
+        [CosyRequired]
+        [Description("Literal text to search for, or a .NET regex pattern when regex:true. Required, non-empty.")] string? pattern = null,
         [Description("Case-sensitive match (default true).")] bool caseSensitive = true,
         [Description("Max items to return (default 500). Lower to bound response size; higher to raise the cap.")] int? max = null,
         [Description("Optional timeout in milliseconds (1..600000). If exceeded, the tool returns via cancellation.")] int? timeoutMs = null,

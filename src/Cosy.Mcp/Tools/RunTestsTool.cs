@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Workspace;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -69,9 +70,17 @@ public sealed class RunTestsTool
         "kind=test_runner_failed or build_failed. Optional timeout_ms kills the subprocess and returns " +
         "partial results parsed from stdout. Requires workspace_open first.")]
     public async Task<object> RunAsync(
-        [Description("Absolute path to the .csproj or .sln to test. Relative paths are rejected.")] string project,
         IWorkspaceHost workspaceHost,
         ILogger<RunTestsTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal. Unlike
+        // compile_check.project (same wire name, opposite semantics -- no default here, and the
+        // handler rejects empty with must_not_be_empty below), run_tests.project IS marked; the
+        // existing string.IsNullOrEmpty(project) check is [NotNullWhen(false)]-annotated, so it
+        // narrows project for the rest of this method once ArgumentGuard has already rejected an
+        // absent/null project before dispatch.
+        [CosyRequired]
+        [Description("Absolute path to the .csproj or .sln to test. Relative paths are rejected.")] string? project = null,
         [Description("Optional dotnet-test --filter expression (VSTest filter syntax). Silently ignored by MTP-backed projects.")] string? filter = null,
         [Description("Optional timeout in milliseconds (1..600000). On timeout the subprocess tree is killed and partial results are returned in error.details.partial_results.")] int? timeoutMs = null,
         [Description("If true, pass --no-build to dotnet test (skip rebuild — caller must ensure the project is already built). Default false.")] bool noBuild = false,

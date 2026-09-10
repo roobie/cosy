@@ -74,27 +74,69 @@ builder.Services
     .AddMcpServer(options => options.ServerInstructions = ServerInstructionsText.Build(tracePath))
     .WithStdioServerTransport()
     .WithToolsFromAssembly()
-    .WithRequestFilters(filters => filters.AddCallToolFilter(next => async (context, ct) =>
-    {
-        var toolName = context.Params?.Name ?? "(unknown)";
-        // SDK exposes Arguments as IDictionary<string, JsonElement>?; Emit accepts
-        // the same type to avoid an unnecessary copy on a hot path. Sink does not mutate.
-        var args = context.Params?.Arguments;
+    .WithRequestFilters(filters => filters
+        .AddCallToolFilter(next => async (context, ct) =>
+        {
+            var toolName = context.Params?.Name ?? "(unknown)";
+            // SDK exposes Arguments as IDictionary<string, JsonElement>?; Emit accepts
+            // the same type to avoid an unnecessary copy on a hot path. Sink does not mutate.
+            var args = context.Params?.Arguments;
 
-        // ADR-0019. Two placement decisions, both load-bearing:
-        //  - INSIDE the traced dispatch, so a repaired argument fault is traced as the
-        //    invalid_argument it now is rather than as the unhandled_exception it used to be.
-        //  - OUTSIDE the sink null-check below, so the envelope a caller receives never depends
-        //    on whether COSY_TRACE_PATH happens to be configured.
-        var schema = ArgumentGuard.SchemaOf(context.MatchedPrimitive as McpServerTool);
-        ValueTask<CallToolResult> Guarded() => ArgumentGuard.InvokeAsync(schema, args, () => next(context, ct));
+            // ADR-0019. Two placement decisions, both load-bearing:
+            //  - INSIDE the traced dispatch, so a repaired argument fault is traced as the
+            //    invalid_argument it now is rather than as the unhandled_exception it used to be.
+            //  - OUTSIDE the sink null-check below, so the envelope a caller receives never depends
+            //    on whether COSY_TRACE_PATH happens to be configured.
+            var schema = ArgumentGuard.SchemaOf(context.MatchedPrimitive as McpServerTool);
+            ValueTask<CallToolResult> Guarded() => ArgumentGuard.InvokeAsync(schema, args, () => next(context, ct));
 
-        var sink = context.Services?.GetService<TraceSink>();
-        if (sink is null) return await Guarded();
+            var sink = context.Services?.GetService<TraceSink>();
+            if (sink is null) return await Guarded();
 
-        // Body lives in TraceDispatch so the throw path is unit-testable — see that type.
-        return await TraceDispatch.InvokeAsync(sink, toolName, args, Guarded);
-    }));
+            // Body lives in TraceDispatch so the throw path is unit-testable — see that type.
+            return await TraceDispatch.InvokeAsync(sink, toolName, args, Guarded);
+        }));
 
-await builder.Build().RunAsync();
+var app = builder.Build();
+
+// 7. D-02(a): stamp the REQUIRED. prose marker onto every [CosyRequired] parameter's emitted
+//    description — ONCE, at initialization, before the transport serves anything.
+//
+//    This was originally an AddListToolsFilter that rewrote tool.InputSchema on every
+//    tools/list. Measured 2026-09-10, that was unsafe: McpServerTool.ProtocolTool returns a
+//    SHARED Tool instance and ListToolsResult.Tools hands back those same instances, so the
+//    filter mutated process-wide state on every request. Proved by disabling Apply's
+//    idempotency guard and calling tools/list twice — the second response came back
+//    "REQUIRED. REQUIRED. Edits to apply...", which can only happen if the filter re-applied
+//    on top of its own earlier mutation of a shared object.
+//
+//    Two distinct problems, only one of which the idempotency guard addressed:
+//      - Correctness under concurrency. Tool.InputSchema is a JsonElement — a STRUCT, not a
+//        reference — so assigning it copies several fields (the owning JsonDocument plus a
+//        token index). That write is not atomic, and two concurrent tools/list calls could
+//        tear it: a reader can observe a new document reference beside a stale index.
+//        Idempotency prevents a doubled prefix; it says nothing about thread safety.
+//      - Wasted work. Every tools/list re-parsed and re-serialized each marked tool's schema,
+//        for a result that never changes after the first pass.
+//
+//    Doing it here fixes both: the mutation happens once, on the startup thread, strictly
+//    before RunAsync opens the transport, so no reader can ever observe a partial write.
+//    The catalog-completeness argument for filtering over per-tool McpServerTool.Create
+//    registration still holds and is why this walks the registered tools rather than
+//    hand-listing them: a newly added tool is picked up automatically
+//    (12.3-RESEARCH.md Q1, ADR-0023).
+//
+//    Depends on ProtocolTool being a stable shared instance. That is not incidental — it is
+//    the property that makes a one-shot mutation reach every later response, so it is pinned
+//    by ProtocolTool_IsAStableSharedInstance_SoStartupStampingReachesEveryResponse. If a
+//    future SDK returns a fresh Tool per request, that fact goes red and this must move back
+//    to a per-request transform.
+foreach (var tool in app.Services.GetServices<McpServerTool>())
+{
+    var required = CosyRequiredMap.For(tool.ProtocolTool.Name);
+    if (required.Count == 0) continue;
+    tool.ProtocolTool.InputSchema = SchemaRequiredPrefix.Apply(tool.ProtocolTool.InputSchema, required);
+}
+
+await app.RunAsync();
 return 0;

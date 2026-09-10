@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Source;
 using Cosy.Mcp.Workspace;
@@ -84,15 +85,23 @@ public sealed class ReadSourceSpanTool
         "data.read_snapshot_id echoes which base answered (the supplied id, or explicit null " +
         "for the current state). Requires workspace_open first.")]
     public async Task<object> GetAsync(
-        [Description("Solution-relative (or longer) file path suffix, resolved case-insensitively " +
-            "against Roslyn Solution documents -- the same resolution apply_edits_verified uses. " +
-            "No filesystem fallback: a .csproj, .sln, .md or non-Solution file is unreachable.")] string file,
         IWorkspaceHost workspaceHost,
         ILogger<ReadSourceSpanTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal.
+        [CosyRequired]
+        [Description("Solution-relative (or longer) file path suffix, resolved case-insensitively " +
+            "against Roslyn Solution documents -- the same resolution apply_edits_verified uses. " +
+            "No filesystem fallback: a .csproj, .sln, .md or non-Solution file is unreachable.")] string? file = null,
+        // D-05, the working precedent: already schema-optional before this phase; only the
+        // attribute is new. The hand-written "REQUIRED --" marker is removed from the prose
+        // below so the marker comes from [CosyRequired]/SchemaRequiredPrefix like every other
+        // parameter, not from hand-authored text that can drift from it.
+        [CosyRequired]
         [Description("Span to read, {start, end} zero-based, end-exclusive UTF-16 code unit " +
             "offsets into the document's Roslyn SourceText -- never byte offsets from wc -c, and " +
-            "wc -m is also wrong (surrogate pairs). REQUIRED -- " +
-            "an omitted span is refused, never answered with a whole-file read.")] Span? span = null,
+            "wc -m is also wrong (surrogate pairs). An omitted span is refused, never answered " +
+            "with a whole-file read.")] Span? span = null,
         [Description("Max characters of text to return (default 8000, range 500..200000). A real " +
             "ceiling: the returned text is never longer, and the cut is snapped back to a " +
             "statement/member boundary, then a line break, then a hard cut.")] int? maxChars = null,
@@ -100,6 +109,10 @@ public sealed class ReadSourceSpanTool
         [Description("Optional snapshot id to read on top of (ADR-0007 §1.2), instead of the current workspace state. Defaults to the current solution when absent.")] string? fromSnapshotId = null,
         CancellationToken ct = default)
     {
+        // ArgumentGuard rejects an absent/null file (CosyRequired) before this handler ever
+        // runs -- this binding is a compiler satisfaction only, not a second requiredness check.
+        var fileText = file!;
+
         // --- ARGUMENT VALIDATION (cheap first, before any workspace access) ---
 
         // D-14: same per-response character budget range read_source enforces. Response-side
@@ -146,7 +159,7 @@ public sealed class ReadSourceSpanTool
         }
 
         logger.LogDebug("read_source_span: file={File}, span={Span}, maxChars={MaxChars}, timeoutMs={TimeoutMs}, fromSnapshotId={FromSnapshotId}",
-            file, span, maxChars, timeoutMs, fromSnapshotId);
+            fileText, span, maxChars, timeoutMs, fromSnapshotId);
 
         var sw = Stopwatch.StartNew();
 
@@ -165,17 +178,17 @@ public sealed class ReadSourceSpanTool
             var matches = baseSolution.Projects
                 .SelectMany(p => p.Documents)
                 .Where(d => d.FilePath != null &&
-                            d.FilePath.EndsWith(file, StringComparison.OrdinalIgnoreCase))
+                            d.FilePath.EndsWith(fileText, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (matches.Count == 0)
                 return Envelope<ReadSourceSpanToolData>.Err(
-                    ToolError.InvalidArgument("file", "not_found_in_workspace", value: file),
+                    ToolError.InvalidArgument("file", "not_found_in_workspace", value: fileText),
                     (int)sw.ElapsedMilliseconds);
             if (matches.Count > 1)
                 return Envelope<ReadSourceSpanToolData>.Err(
-                    ToolError.InvalidArgument("file", "ambiguous_path", value: file,
-                        message: $"ambiguous file path: {file} matches {matches.Count} documents"),
+                    ToolError.InvalidArgument("file", "ambiguous_path", value: fileText,
+                        message: $"ambiguous file path: {fileText} matches {matches.Count} documents"),
                     (int)sw.ElapsedMilliseconds);
 
             var document = matches[0];
@@ -192,7 +205,7 @@ public sealed class ReadSourceSpanTool
                     (int)sw.ElapsedMilliseconds);
             if (span.End > text.Length)
                 return Envelope<ReadSourceSpanToolData>.Err(
-                    ToolError.OutOfBounds(file, span, documentLength: text.Length),
+                    ToolError.OutOfBounds(fileText, span, documentLength: text.Length),
                     (int)sw.ElapsedMilliseconds);
 
             // A2 (12-RESEARCH.md): the requested span has no enclosing declaration the way a
@@ -221,7 +234,7 @@ public sealed class ReadSourceSpanTool
             var solutionDir = SolutionPaths.GetSolutionDirectory(baseSolution);
             var relFile = document.FilePath is not null
                 ? Path.GetRelativePath(solutionDir, document.FilePath).Replace('\\', '/')
-                : file;
+                : fileText;
 
             sw.Stop();
             var elapsedMs = (int)sw.ElapsedMilliseconds;

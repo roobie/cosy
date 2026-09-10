@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Serialization;
 using Cosy.Mcp.Contracts;
+using Cosy.Mcp.Dispatch;
 using Cosy.Mcp.Refactor;
 using Cosy.Mcp.Search;
 using Cosy.Mcp.Workspace;
@@ -42,9 +43,12 @@ public sealed class ReadSnapshotTool
         "Does NOT write to disk or alter the snapshot ring. Unknown/evicted id returns " +
         "error.kind=snapshot_not_found. Optional file suffix narrows to one changed document.")]
     public async Task<object> ReadAsync(
-        [Description("The 8-char hex snapshot id to inspect (from extract_method / apply_edits_verified).")] string snapshotId,
         IWorkspaceHost workspaceHost,
         ILogger<ReadSnapshotTool> logger,
+        // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal.
+        [CosyRequired]
+        [Description("The 8-char hex snapshot id to inspect (from extract_method / apply_edits_verified).")] string? snapshotId = null,
         [Description("Optional file-path suffix to narrow the diff to a single changed document.")] string? file = null,
         CancellationToken ct = default)
     {
