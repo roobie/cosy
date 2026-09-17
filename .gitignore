@@ -486,5 +486,9 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
-# Machine-local mise overrides (host-specific env, e.g. CLR_ICU_VERSION_OVERRIDE)
+# Machine-local mise overrides (host-specific env, e.g. CLR_ICU_VERSION_OVERRIDE, and the
+# secret-broker env line -- see mise.toml [env])
 mise.local.toml
+
+# Workspace-local NuGet package cache used by the CI workflows (NUGET_PACKAGES)
+.nuget/

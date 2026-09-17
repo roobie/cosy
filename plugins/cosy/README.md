@@ -19,22 +19,46 @@ repository. That is one extra command, not a blocker — step 1 below.
 
 ## Install
 
+**One command, from a clone of this repository, naming the C# repo you want Cosy to work
+in:**
+
+```sh
+git clone https://github.com/roobie/cosy.git
+cd cosy
+bash scripts/setup-repo.sh ~/work/my-api
+```
+
+It packs the package, creates the consumer repo's tool manifest if it has none, installs
+`Cosy.Mcp` pinned to this clone's version, restores it, adds or refreshes the marketplace,
+installs or updates the plugin, and ends by running `doctor`. Then **restart Claude Code** —
+a running MCP server holds its old dll for the life of the session.
+
+Re-running it is also the update path. `--dry-run` shows the plan, `--help` lists the flags,
+`--skip-plugin` does the tool half only. On Windows it needs Git Bash (or WSL); a stock
+`bash.exe` on PATH may be the WSL launcher stub rather than Git's bash, in which case put
+Git's `usr/bin` first on PATH.
+
+### Trace collection is opt-in
+
+`--tracing` additionally sets `env.COSY_TRACE_PATH` in your `~/.claude/settings.json`, which
+is where Claude Code's MCP servers read it from, so the server writes one JSONL record per
+tool call under that prefix — default `~/.local/cosy/traces/cosy-trace`, one file per
+session. Without the flag nothing is written. Nothing is transmitted anywhere: the files are
+local and you manage rotation. An existing different value is reported, never overwritten,
+and the file is backed up before any edit.
+
+`doctor`'s `tracing:` line reports that the variable is *set*, not that records are being
+written; only a file appearing under your prefix after a real tool call proves that.
+
+### The steps, if you would rather run them yourself
+
 Step 1 runs in **a clone of this repository**. Steps 2–5 run in the **consumer
-repository** — the C# repo you want Cosy to work in.
+repository**.
 
 1. Build the package:
 
    ```sh
-   git clone https://github.com/roobie/cosy.git
-   cd cosy
    dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release     # -> artifacts/nupkg/
-   ```
-
-   **Steps 2–4 collapse into one** if you have [`just`](https://github.com/casey/just).
-   From this clone, naming your own repo, and it runs `doctor` at the end:
-
-   ```sh
-   just install-into ~/work/my-api
    ```
 
 2. `dotnet new tool-manifest` (once, in the consumer repo). Creates the local tool
@@ -43,8 +67,12 @@ repository** — the C# repo you want Cosy to work in.
    `.config/`, depending on the SDK version that runs it — either location works, because
    resolution walks up from wherever the file is.
 
-3. `dotnet tool update --add-source /abs/path/to/cosy/artifacts/nupkg Cosy.Mcp` —
-   installs the server as a local tool declared in that manifest.
+3. `dotnet tool update --add-source /abs/path/to/cosy/artifacts/nupkg --version <VERSION> Cosy.Mcp`
+   — installs the server as a local tool declared in that manifest. `<VERSION>` is the
+   `<Version>` in `src/Cosy.Mcp/Cosy.Mcp.csproj`, and passing it matters: `--add-source`
+   only *adds* a source, it does not constrain which version is selected, so without it a
+   higher version in that folder or in any feed you have configured wins and your manifest
+   ends up pinned to something this clone never built.
 
    Two things about that path. It must point at the **directory containing the `.nupkg`**,
    which is `artifacts/nupkg` inside the clone — not the clone's root, which yields

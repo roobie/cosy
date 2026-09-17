@@ -1,7 +1,6 @@
-# Toolchain pin only. The build and install recipes live in the `justfile` — one runner,
-# not two saying the same thing in different syntax. `mise` here is for getting a matching
-# SDK; `just` is for doing something with it. Neither runner is required — the README spells
-# out the plain dotnet commands — but the SDK VERSION is: `global.json` asks for 10.0.100,
+# Toolchain pin, plus the one setup task. `mise` here is for getting a matching SDK and for
+# running `setup-repo`; it is not required — the script is plain bash and the README spells
+# out the dotnet commands underneath it — but the SDK VERSION is: `global.json` asks for 10.0.100,
 # because Roslyn 5.3.0's analyzers reference compiler 4.12.0.0 and SDK 8 ships 4.11.0.0
 # (`CS9057`). SDK 10 builds this; SDK 8 cannot.
 #
@@ -13,3 +12,15 @@
 [tools]
 dotnet = ["10.0.202", "8.0.420"]
 node = "22"
+
+[tasks.setup-repo]
+description = "Install or update Cosy in a C# repository: `mise run setup-repo -- ~/work/my-api`. Add --tracing to switch on local trace collection; --dry-run to see the plan; --help for the flags"
+# Bash rather than a task-runner script so it also works from Git Bash on Windows, where the
+# only other prerequisite is the .NET SDK. The one step that needs a JSON implementation --
+# the settings.json edit behind --tracing -- is delegated to `cosy-mcp settings
+# set-trace-path`, a subcommand of the binary this script installs two steps earlier.
+run = "bash scripts/setup-repo.sh"
+
+[tasks.pack]
+description = "Build the NuGet package into artifacts/nupkg/ — setup-repo does this for you when the package is missing"
+run = "dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release"

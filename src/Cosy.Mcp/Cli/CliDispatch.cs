@@ -32,6 +32,14 @@ public static class CliDispatch
             return true;
         }
 
+        // `settings set-trace-path <prefix>` -- the one setup step that has to edit JSON on a
+        // machine whose only prerequisite is a .NET SDK (src/Cosy.Mcp/Cli/SettingsCommand.cs).
+        if (args[0] == "settings")
+        {
+            exitCode = SettingsCommand.Run(args[1..], Console.Out, Console.Error);
+            return true;
+        }
+
         return false;
     }
 

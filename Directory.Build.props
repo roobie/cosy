@@ -5,4 +5,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+  <!-- NuGet lock files (packages.lock.json, committed beside each csproj). They record the
+       resolved graph WITH content hashes, and CI keys its NuGet package cache on their hash.
+       Regenerate after a Directory.Packages.props change with a plain
+       `dotnet restore` locally. In CI (`CI=true`, set explicitly by both workflows) restore
+       runs in locked mode, so a lock file that no longer matches the project graph fails the
+       restore instead of being silently rewritten on the runner.
+       testdata/SampleSolution has its own Directory.Build.props, which stops the upward
+       search, so the fixture projects the tests restore do NOT get lock files. -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
 </Project>

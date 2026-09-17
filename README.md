@@ -20,41 +20,44 @@ git clone https://github.com/roobie/cosy.git
 cd cosy
 ```
 
-Everything below uses [`just`](https://github.com/casey/just), which is optional — every
-recipe is a couple of plain `dotnet` commands, spelled out in
-[Without `just`](#without-just).
+One `bash` script does the whole install; [Without the script](#without-the-script) spells
+out the same steps as plain `dotnet` commands. On Windows it needs Git Bash — see
+[Requirements](#requirements).
 
 ### Install
-
-Which of the two you need is decided by how your client launches the server.
 
 **As a Claude Code plugin.** The plugin launches `dotnet tool run cosy-mcp`, which resolves
 a **per-repository** tool manifest — so the install goes into the C# repo you want Cosy to
 work in, and a global install does not satisfy it:
 
 ```sh
-just install-into ~/work/my-api     # your C# repo, not this one
+bash scripts/setup-repo.sh ~/work/my-api     # your C# repo, not this one
+# with mise: mise run setup-repo -- ~/work/my-api
 ```
 
-That packs, creates the manifest if the repo has none, pins the tool, restores it, and ends
-by running `doctor` — so a broken install says so here rather than as a silent MCP failure
-three steps later. Then, in Claude Code:
+That packs, creates the manifest if the repo has none, pins the tool to this clone's
+version, restores it, adds or refreshes the marketplace, installs or updates the plugin, and
+ends by running `doctor` — so a broken install says so here rather than as a silent MCP
+failure three steps later. Then **restart Claude Code**.
+
+`--dry-run` shows the plan and writes nothing; `--help` lists the flags; `--skip-plugin`
+does the tool half only.
+
+**Optional trace collection.** `--tracing` also sets `env.COSY_TRACE_PATH` in your
+`~/.claude/settings.json`, which is where Claude Code's MCP servers read it from, so the
+server writes one JSONL record per tool call under that prefix (default
+`~/.local/cosy/traces/cosy-trace`, one file per session). It is **off unless you ask for
+it**, nothing is transmitted anywhere, and an existing different value is reported rather
+than overwritten. `doctor`'s `tracing:` line tells you the variable is set, not that records
+are being written — only a file appearing under the prefix proves that.
+
+**Any other MCP client.** These launch the `cosy-mcp` binary directly, so install it
+globally and register it:
 
 ```sh
-claude plugin marketplace add https://github.com/roobie/cosy.git
-claude plugin install cosy@cosy-mcp
+dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release
+dotnet tool update --global --add-source artifacts/nupkg Cosy.Mcp
 ```
-
-and restart it.
-
-**Any other MCP client.** These launch the `cosy-mcp` binary directly, so a global install
-is what you want:
-
-```sh
-just install-global
-```
-
-then register it:
 
 ```json
 { "mcpServers": { "cosy": { "command": "cosy-mcp", "type": "stdio" } } }
@@ -64,12 +67,13 @@ then register it:
 
 ```sh
 git pull
-just install-into ~/work/my-api     # or: just install-global
+bash scripts/setup-repo.sh ~/work/my-api
 ```
 
-Re-running the install recipe *is* the update — each one re-packs and re-pins, and every
-recipe is safe to re-run because they use `dotnet tool update`, which installs when the
-tool is absent and re-pins when it is present.
+Re-running the script *is* the update — every step reads current state first and re-runs as
+a no-op, and the tool install uses `dotnet tool update`, which installs when the tool is
+absent and re-pins when it is present. It also asserts afterwards that the **installed**
+plugin reports this clone's version, which `doctor` cannot check.
 
 **Then restart your MCP client.** A server process started before the update keeps
 executing the *old* package: the manifest reads new, `doctor` passes, and every tool call
@@ -86,7 +90,8 @@ stale while another is current.
 ### Verify
 
 ```sh
-just doctor ~/work/my-api           # changes nothing
+cd ~/work/my-api && dotnet tool run cosy-mcp doctor \
+  --plugin-root /abs/path/to/cosy/plugins/cosy     # changes nothing
 ```
 
 Three of `doctor`'s checks gate the exit code, run in order, and stop at the first failure:
@@ -101,22 +106,35 @@ and `tracing`. `--json` puts all five on one machine-readable line.
 `doctor` runs no network probe and cannot tell you the marketplace is unreachable — that
 failure surfaces inside `claude plugin marketplace add`, with Claude Code's own error.
 
-### Without `just`
+### Without the script
 
-`just install-global` is:
+`scripts/setup-repo.sh DIR` is a pack in this clone:
 
 ```sh
 dotnet pack src/Cosy.Mcp/Cosy.Mcp.csproj -c Release
-dotnet tool update --global --add-source ./artifacts/nupkg Cosy.Mcp
 ```
 
-`just install-into DIR` is the same pack, then, **run from the consumer repository**:
+then, **run from the consumer repository**:
 
 ```sh
 dotnet new tool-manifest                                          # once per consumer repo
-dotnet tool update --add-source /abs/path/to/cosy/artifacts/nupkg Cosy.Mcp
+dotnet tool update --add-source /abs/path/to/cosy/artifacts/nupkg --version <VERSION> Cosy.Mcp
 dotnet tool restore                                               # SDK 8 only; SDK 10 auto-restores
 dotnet tool run cosy-mcp doctor --plugin-root /abs/path/to/cosy/plugins/cosy
+```
+
+then, in Claude Code, `claude plugin marketplace add <this clone>` and
+`claude plugin install cosy@cosy-mcp`.
+
+`<VERSION>` is the `<Version>` in `src/Cosy.Mcp/Cosy.Mcp.csproj`. **Pass it.** `--add-source`
+only *adds* a source, it does not constrain which version is chosen, so without it a higher
+version in that folder or in any feed you have configured wins and your manifest is pinned to
+something this clone never built.
+
+For the optional trace collection the script's last step is:
+
+```sh
+dotnet tool run cosy-mcp settings set-trace-path ~/.local/cosy/traces/cosy-trace
 ```
 
 Two things to get right, both of which produce confusing failures:
