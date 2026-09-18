@@ -38,6 +38,14 @@ or `discard_snapshot` evicts it (and cascades to any snapshot chained off it). `
 takes a `snapshotId` a prior mutation produced and returns a diff against its parent — it is
 not a way to read unmodified source.
 
+Staging does not chain unless you say so. A second `apply_edits_verified` or `extract_method`
+call that omits `fromSnapshotId` stages off the committed solution again, not off your last
+snapshot — and committing it silently drops the earlier edits, with no error at either call.
+Pass the previous response's `snapshot_id` as `fromSnapshotId` to chain instead. Every staged
+response now echoes `data.applied_on_snapshot_id`: explicit `null` when CurrentSolution
+answered, the id you passed when it chained. Compare it against the base you believed you were
+building on — if it disagrees, your edits are staging on the wrong foundation.
+
 In-Solution C# is read with `read_source` or `read_source_span`; `Read` is for everything else —
 project files, solution files, build-property files, markdown, and build output. This is the same
 corpus boundary `## Corpus boundary` below draws for `find_text`/`find_files`, applied to reading.

@@ -55,6 +55,14 @@ public static class TraceArgShaping
         "span", "start", "end", "max", "maxChars", "timeoutMs",
         "edits", // the ARRAY key itself; per-element shaping is ShapeEdits, not this table
         "mode", "readSnapshotId",
+        // Quick task 260918-2qp / issue #15: tfm IDENTIFIES an existing loaded project
+        // instance (matches workspace_open's data.projects[].target_framework); it is not
+        // free text, same reasoning as `project` above.
+        "tfm",
+        // run_tests' renamed projectPath (D-5) -- still a coordinate (an absolute filesystem
+        // path), never free text; `project` stays in this set too since it is still live on
+        // compile_check and find_files.
+        "projectPath",
     };
 
     /// <summary>

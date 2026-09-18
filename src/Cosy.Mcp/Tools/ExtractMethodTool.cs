@@ -23,8 +23,15 @@ namespace Cosy.Mcp.Tools;
 // original_span, post_extract_diagnostics, action_title}. No new_text in echo
 // (D-17 spirit — extracted body may carry secrets/noise; length round-trip-verifies).
 
+// applied_on_snapshot_id echoes the base these edits were actually staged against (ADR-0007
+// §1.2 amendment, 2026-09-17): the fromSnapshotId parameter verbatim, or explicit JSON null when
+// CurrentSolution answered. JsonIgnore(Never) is mandatory — the SDK-wide WhenWritingNull default
+// would otherwise OMIT this key when null, and an omitted key is indistinguishable from a server
+// too old to carry the field. Mirrors ApplyEditsVerifiedToolData.AppliedOnSnapshotId exactly.
 public sealed record ExtractMethodResult(
     [property: JsonPropertyName("snapshot_id")]              string SnapshotId,
+    [property: JsonPropertyName("applied_on_snapshot_id"), JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    string? AppliedOnSnapshotId,
     [property: JsonPropertyName("edits")]                    IReadOnlyList<ExtractMethodEdit> Edits,
     [property: JsonPropertyName("original_span")]            Span OriginalSpan,
     [property: JsonPropertyName("post_extract_diagnostics")] IReadOnlyList<ExtractMethodDiagnostic> PostExtractDiagnostics,
@@ -86,7 +93,7 @@ public sealed class ExtractMethodTool
         [Description("Name of the new method. Must be a valid C# identifier.")] string? newMethodName = null,
         [CosyRequired]
         [Description("Must be true; false is not supported in spike (RenameTool precedent).")] bool? dryRun = null,
-        [Description("Optional snapshot id to chain extract off of (ADR-0007 §1.2). Defaults to CurrentSolution.")] string? fromSnapshotId = null,
+        [Description("Optional snapshot id to chain extract off of (ADR-0007 §1.2). Absent means CurrentSolution, which is NOT the snapshot your previous call returned: extract_method never promotes, so two consecutive calls that both omit this both stage off the same base and the later snapshot does not contain the earlier one's edits. Pass the previous call's snapshot_id to chain; the response echoes the base actually used as data.applied_on_snapshot_id.")] string? fromSnapshotId = null,
         [Description("Optional timeout in milliseconds; linked to caller CancellationToken.")] int? timeoutMs = null,
         CancellationToken ct = default)
     {
@@ -392,6 +399,7 @@ public sealed class ExtractMethodTool
 
             var data = new ExtractMethodResult(
                 SnapshotId: snapshotId,
+                AppliedOnSnapshotId: fromSnapshotId,
                 Edits: edits,
                 OriginalSpan: spanValue,
                 PostExtractDiagnostics: postExtractDiagnostics,

@@ -49,9 +49,12 @@ public sealed class FindFilesTool
         "case-insensitive and supporting ** (D-07); supply either, both, or neither (absent " +
         "means every document). project matches a project's assembly name, which stays stable " +
         "across a multi-targeted project's per-framework instances, and selects every framework " +
-        "instance at once; a name matching no project returns invalid_argument. A document owned " +
-        "by more than one project instance -- e.g. a multi-targeted project's per-framework " +
-        "duplicates -- appears once, with every owning project listed in projects[]. Items are " +
+        "instance at once (omitted means every project); tfm additionally FILTERS to one " +
+        "framework instance when supplied, with or without project, and never disturbs the " +
+        "every-instance default when omitted. A project name matching no project, or a tfm " +
+        "matching no instance, returns invalid_argument. A document owned by more than one " +
+        "project instance -- e.g. a multi-targeted project's per-framework duplicates -- appears " +
+        "once, with every owning (and tfm-surviving) project listed in projects[]. Items are " +
         "ordered by file (Ordinal) and capped at max (default 500); envelope carries truncated " +
         "and total_count. Requires workspace_open first.")]
     public async Task<object> FindAsync(
@@ -59,7 +62,8 @@ public sealed class FindFilesTool
         ILogger<FindFilesTool> logger,
         [Description("Optional glob matched against each document's basename (e.g. '*.Service.cs'). Case-insensitive; supports **. Absent means every basename.")] string? nameGlob = null,
         [Description("Optional glob matched against each document's solution-relative path (e.g. 'Sample.Contracts/**/*.cs'). Case-insensitive; supports **. Absent means every path.")] string? pathGlob = null,
-        [Description("Optional project assembly name filter -- matches every framework instance of a multi-targeted project. A name matching no project returns invalid_argument.")] string? project = null,
+        [Description("Optional project assembly name filter -- matches every framework instance of a multi-targeted project (omitted means every project). A name matching no project returns invalid_argument.")] string? project = null,
+        [Description("Optional target_framework filter (matches workspace_open's data.projects[].target_framework) -- narrows to ONE framework instance, with or without project. A FILTER: omitting it keeps the shipped every-framework-instance default. Legal with or without project. A value matching no instance returns invalid_argument.")] string? tfm = null,
         [Description("Max items to return (default 500). Lower to bound response size; higher to raise the cap.")] int? max = null,
         [Description("Optional timeout in milliseconds (1..600000). If exceeded, the tool returns via cancellation.")] int? timeoutMs = null,
         CancellationToken ct = default)
@@ -80,8 +84,8 @@ public sealed class FindFilesTool
         if (solution is null)
             return Envelope<FindFilesToolData>.Err(ToolError.WorkspaceNotLoaded());
 
-        logger.LogDebug("find_files: nameGlob={NameGlob}, pathGlob={PathGlob}, project={Project}, max={Max}, timeoutMs={TimeoutMs}",
-            nameGlob, pathGlob, project, max, timeoutMs);
+        logger.LogDebug("find_files: nameGlob={NameGlob}, pathGlob={PathGlob}, project={Project}, tfm={Tfm}, max={Max}, timeoutMs={TimeoutMs}",
+            nameGlob, pathGlob, project, tfm, max, timeoutMs);
 
         var sw = Stopwatch.StartNew();
 
@@ -109,11 +113,28 @@ public sealed class FindFilesTool
             // project's Project.Name carries a Roslyn-appended "(tfm)" suffix per instance
             // (10.1-RESEARCH.md Priority Finding 2: "MultiTfm(net8.0)" / "MultiTfm(net9.0)"),
             // while AssemblyName ("MultiTfm") stays identical across instances -- the value that
-            // actually selects "every framework instance" as the description promises. No
-            // matching project anywhere in the solution -> invalid_argument.
-            if (project is not null && !solution.Projects.Any(p => p.AssemblyName == project))
+            // actually selects "every framework instance" as the description promises.
+            //
+            // Quick task 260918-2qp / issue #15, D-1/D-4: ProjectResolution.Resolve is the
+            // SAME predicate compile_check uses, with the FILTER disposition (design_questions_
+            // settled §1/§4) -- never `ambiguous`, and an omitted project always means "every
+            // project" (D-4). A zero-survivor result distinguishes "the assembly itself doesn't
+            // exist" (blame project) from "the assembly exists but not with this tfm" (blame
+            // tfm) -- the same discrimination compile_check makes.
+            var matchingInstances = ProjectResolution.Resolve(solution, project, tfm);
+            // Zero survivors is only an error when a filter was actually supplied -- with both
+            // project and tfm omitted, a genuinely empty (zero-project) solution must fall
+            // through to an empty items[] result, exactly as before this task, not an
+            // invalid_argument that names a filter the caller never sent.
+            if (matchingInstances.Count == 0 && (project is not null || tfm is not null))
+            {
+                if (project is not null && !solution.Projects.Any(p => p.AssemblyName == project))
+                    return Envelope<FindFilesToolData>.Err(
+                        ToolError.InvalidArgument("project", "not_found", value: project));
                 return Envelope<FindFilesToolData>.Err(
-                    ToolError.InvalidArgument("project", "not_found", value: project));
+                    ToolError.InvalidArgument("tfm", "not_found", value: tfm));
+            }
+            var matchingProjectIds = matchingInstances.Select(p => p.Id).ToHashSet();
 
             // D-07: one glob dialect, one instance built per supplied parameter -- nameGlob and
             // pathGlob filter different projections (basename vs full relative path), so they
@@ -126,7 +147,11 @@ public sealed class FindFilesTool
             var candidates = solution.Projects
                 .SelectMany(p => p.Documents.Select(d => (Project: p, Document: d)))
                 .Where(x => x.Document.FilePath is not null)
-                .Where(x => project is null || x.Project.AssemblyName == project)
+                // Quick task 260918-2qp: per-INSTANCE narrowing (matchingProjectIds), not a
+                // second AssemblyName re-check -- this is what makes a bare `tfm` (no project)
+                // narrow correctly too, since AssemblyName alone cannot express "this ONE
+                // framework instance of possibly several same-named ones".
+                .Where(x => matchingProjectIds.Contains(x.Project.Id))
                 .Select(x => (
                     x.Project,
                     RelPath: Path.GetRelativePath(solutionDir, x.Document.FilePath!).Replace('\\', '/')))

@@ -73,14 +73,20 @@ public sealed class RunTestsTool
         IWorkspaceHost workspaceHost,
         ILogger<RunTestsTool> logger,
         // Phase 12.3 D-01/D-13: schema-optional now (nullable + = null, moved after DI params —
-        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal. Unlike
-        // compile_check.project (same wire name, opposite semantics -- no default here, and the
-        // handler rejects empty with must_not_be_empty below), run_tests.project IS marked; the
-        // existing string.IsNullOrEmpty(project) check is [NotNullWhen(false)]-annotated, so it
-        // narrows project for the rest of this method once ArgumentGuard has already rejected an
-        // absent/null project before dispatch.
+        // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal.
+        // Quick task 260918-2qp / issue #15, D-5: renamed project -> projectPath. This
+        // parameter was NEVER about "which project in the loaded solution" -- it wants an
+        // absolute filesystem path and never needed a loaded workspace at all -- so it stops
+        // sharing a name with compile_check's/find_files' AssemblyName-valued `project`. Path
+        // semantics, [CosyRequired] marking, and every reason string are UNCHANGED by the
+        // rename; the existing string.IsNullOrEmpty(projectPath) check is
+        // [NotNullWhen(false)]-annotated, so it narrows projectPath for the rest of this method
+        // once ArgumentGuard has already rejected an absent/null projectPath before dispatch.
         [CosyRequired]
-        [Description("Absolute path to the .csproj or .sln to test. Relative paths are rejected.")] string? project = null,
+        [Description("Absolute path to the .csproj or .sln to test. Relative paths are rejected. " +
+                     "This is a FILESYSTEM PATH, not the assembly name compile_check and " +
+                     "find_files take as `project` -- the wire names were split precisely so " +
+                     "the two semantics could stop colliding.")] string? projectPath = null,
         [Description("Optional dotnet-test --filter expression (VSTest filter syntax). Silently ignored by MTP-backed projects.")] string? filter = null,
         [Description("Optional timeout in milliseconds (1..600000). On timeout the subprocess tree is killed and partial results are returned in error.details.partial_results.")] int? timeoutMs = null,
         [Description("If true, pass --no-build to dotnet test (skip rebuild — caller must ensure the project is already built). Default false.")] bool noBuild = false,
@@ -88,13 +94,13 @@ public sealed class RunTestsTool
     {
         // --- ARG VALIDATION (no workspace lease required for arg checks) ---
 
-        if (string.IsNullOrEmpty(project))
+        if (string.IsNullOrEmpty(projectPath))
             return Envelope<RunTestsToolData>.Err(
-                ToolError.InvalidArgument("project", "must_not_be_empty", value: project));
+                ToolError.InvalidArgument("projectPath", "must_not_be_empty", value: projectPath));
 
-        if (!Path.IsPathRooted(project))
+        if (!Path.IsPathRooted(projectPath))
             return Envelope<RunTestsToolData>.Err(
-                ToolError.InvalidArgument("project", "relative_path_rejected", value: project));
+                ToolError.InvalidArgument("projectPath", "relative_path_rejected", value: projectPath));
 
         if (timeoutMs is int rangeCheck && (rangeCheck < 1 || rangeCheck > 600_000))
             return Envelope<RunTestsToolData>.Err(
@@ -110,10 +116,10 @@ public sealed class RunTestsTool
             if (solution is null)
                 return Envelope<RunTestsToolData>.Err(ToolError.WorkspaceNotLoaded());
 
-            projectAbsolute = Path.GetFullPath(project);
+            projectAbsolute = Path.GetFullPath(projectPath);
             if (!File.Exists(projectAbsolute))
                 return Envelope<RunTestsToolData>.Err(
-                    ToolError.InvalidArgument("project", "file_not_found", value: project));
+                    ToolError.InvalidArgument("projectPath", "file_not_found", value: projectPath));
             // Note: Phase 9.x SEC-02 will add path-allowlist enforcement here (T-09-26).
             // For Phase 9 we accept any path that exists. ADR-0007 §3 documents this scope.
         }
@@ -278,6 +284,11 @@ public sealed class RunTestsTool
                 var diagnostics = ParseMsbuildErrors(stdoutLines, stderrLines);
                 if (diagnostics.Count > 0)
                 {
+                    // BuildFailedDetails.Project is a RESPONSE field naming the .csproj that
+                    // failed to build, pinned by RunTestsTests.cs:134 -- deliberately left
+                    // `project`, not renamed alongside the input parameter above. It is a path
+                    // already, so no dialect split exists to fix, and renaming a response key is
+                    // a separate breaking change with no motivation from this task's scope.
                     return Envelope<RunTestsToolData>.Err(
                         ToolError.BuildFailed(
                             project: projectAbsolute,

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.Extensions.Logging;
@@ -126,7 +125,13 @@ public sealed class WorkspaceHost : IWorkspaceHost, IDisposable
                 return LoadResult.Error(
                     $"workspace already loaded from {_loadedPath}; call workspace_close first to switch");
 
-            // Same-path idempotent recount — no OpenSolutionAsync call.
+            // Same-path idempotent recount — no OpenSolutionAsync call. 1FH-03: this recount now
+            // guarantees the same project list a cold load returns, because both call the same
+            // BuildProjectList helper — returning an empty list from a healthy loaded workspace
+            // would be a new instance of the defect Phase 12.2 exists to fix. Diagnostics stays
+            // empty and ResolvedTfm stays null here deliberately (both belong to Phase 12.2's
+            // rework of this path; see quick task 260918-1fh design_decisions §4 for the
+            // recorded finding on ResolvedTfm's redundancy/self-contradiction).
             if (_loadedPath == absolutePath && CurrentSolution is not null)
             {
                 sw.Stop();
@@ -136,6 +141,7 @@ public sealed class WorkspaceHost : IWorkspaceHost, IDisposable
                 {
                     ProjectCount = pc,
                     DocumentCount = dc,
+                    Projects = BuildProjectList(CurrentSolution),
                     ElapsedMs = (int)sw.ElapsedMilliseconds,
                     Diagnostics = Array.Empty<LoadDiagnostic>(),
                     ResolvedTfm = null
@@ -179,7 +185,7 @@ public sealed class WorkspaceHost : IWorkspaceHost, IDisposable
             {
                 var project = await _workspace.OpenProjectAsync(absolutePath, cancellationToken: timeoutCts.Token);
                 solution = project.Solution;
-                resolvedTfm = ResolveTfm(absolutePath);
+                resolvedTfm = ProjectResolution.ResolveTfm(absolutePath);
             }
 
             CurrentSolution = solution;
@@ -196,6 +202,7 @@ public sealed class WorkspaceHost : IWorkspaceHost, IDisposable
             {
                 ProjectCount = projectCount,
                 DocumentCount = documentCount,
+                Projects = BuildProjectList(solution),
                 ElapsedMs = (int)sw.ElapsedMilliseconds,
                 Diagnostics = buffer.ToArray(),
                 ResolvedTfm = resolvedTfm
@@ -495,19 +502,21 @@ public sealed class WorkspaceHost : IWorkspaceHost, IDisposable
         }
     }
 
-    /// <summary>Reads TargetFramework/TargetFrameworks from csproj XML.
-    /// Roslyn's Project API does not expose the TFM string directly.</summary>
-    private static string? ResolveTfm(string csprojPath)
-    {
-        try
-        {
-            var doc = XDocument.Load(csprojPath);
-            var ns = doc.Root?.Name.Namespace ?? XNamespace.None;
-            return doc.Descendants(ns + "TargetFramework").FirstOrDefault()?.Value
-                ?? doc.Descendants(ns + "TargetFrameworks").FirstOrDefault()?.Value?.Split(';')[0].Trim();
-        }
-        catch { return null; }
-    }
+    /// <summary>ONE builder, called from BOTH the cold-load return (:195-202) and the same-path
+    /// short-circuit -- a second, separate population site is how the short-circuit would come
+    /// to return an empty project list from a healthy workspace, the exact defect class Phase
+    /// 12.2 exists to fix. Ordered by AssemblyName then Name (Ordinal) so multi-targeted
+    /// siblings stay adjacent and the ordering is deterministic across calls (Roslyn's own
+    /// solution.Projects order is stable within a load but not guaranteed across loads).
+    /// design_decisions §2: this array is always complete -- workspace_open stays
+    /// expectList:false, and truncation is detectable for free via
+    /// projects.length == project_count rather than an envelope truncated/total_count key.</summary>
+    private static IReadOnlyList<LoadedProject> BuildProjectList(Solution solution) =>
+        solution.Projects
+            .Select(p => new LoadedProject(p.Name, p.AssemblyName, p.FilePath, ProjectResolution.TargetFrameworkOf(p)))
+            .OrderBy(p => p.AssemblyName, StringComparer.Ordinal)
+            .ThenBy(p => p.Name, StringComparer.Ordinal)
+            .ToArray();
 
     public void Dispose()
     {

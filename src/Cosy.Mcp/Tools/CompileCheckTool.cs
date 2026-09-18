@@ -58,19 +58,31 @@ public sealed class CompileCheckTool
         // CS1737, D-12); [CosyRequired] is the sole remaining requiredness signal for snippet.
         [CosyRequired]
         [Description("C# source snippet. May be a compilation unit, a class member, or a bare method body.")] string? snippet = null,
-        // Deliberately NOT [CosyRequired] (D-14 anchor 2): this description already said
-        // "Optional ... Default: solution.Projects.First()" while the schema said required —
-        // the second confirmed instance of the phase's own named defect. The handler already
-        // resolves a null project to the default via ResolveProject below; marking it would
-        // keep rejecting an omitted project, only with better wording.
-        [Description("Optional project name or file-path suffix to bind against. Default: solution.Projects.First(). " +
-                     "Resolution order: exact Name match, FilePath suffix match, case-insensitive Name match.")] string? project = null,
+        // Quick task 260918-2qp / issue #15, D-2/D-3: NOW [CosyRequired] -- the handler no
+        // longer resolves an omitted project to an arbitrary solution.Projects.FirstOrDefault().
+        // The `= null` default is KEPT regardless (ADR-0023): dropping it would put `project`
+        // into the live emitted required[], rejecting every caller ABOVE Cosy where no envelope
+        // can ever be returned -- this repo has shipped that exact incident twice (COSY-0004,
+        // COSY-0005). The handler's null binding below is a compiler satisfaction only, exactly
+        // like `snippet`'s, never a second requiredness check.
+        [CosyRequired]
+        [Description("Project's Project.AssemblyName (quick task 260918-2qp / issue #15, D-1) -- " +
+                     "the same value workspace_open's data.projects[].assembly_name reports, NOT " +
+                     "Project.Name (which carries a Roslyn-appended (tfm) suffix on a multi-targeted " +
+                     "project instance and is rejected here). If the named assembly has more than one " +
+                     "loaded framework instance, also pass tfm to pick one -- omitting tfm there is " +
+                     "refused as ambiguous, never resolved by an arbitrary pick.")] string? project = null,
+        [Description("Optional target_framework filter (matches workspace_open's data.projects[].target_framework) -- " +
+                     "disambiguates when the named project has more than one loaded framework instance. " +
+                     "Required only when that project is multi-targeted; ignored otherwise.")] string? tfm = null,
         [Description("Optional timeout in milliseconds (1..600000). If exceeded, the tool returns via cancellation.")] int? timeoutMs = null,
         CancellationToken ct = default)
     {
-        // ArgumentGuard rejects an absent/null snippet (CosyRequired) before this handler ever
-        // runs -- this binding is a compiler satisfaction only, not a second requiredness check.
+        // ArgumentGuard rejects an absent/null snippet or project (both [CosyRequired]) before
+        // this handler ever runs -- these bindings are compiler satisfactions only, not a second
+        // requiredness check.
         var snippetText = snippet!;
+        var projectSpec = project!;
 
         // Read lease blocks workspace_close from disposing the workspace while we hold a
         // captured snapshot (ADR-0005 §D-06). Lease lifetime covers the entire method body.
@@ -78,12 +90,56 @@ public sealed class CompileCheckTool
         if (solution is null)
             return Envelope<CompileCheckToolData>.Err(ToolError.WorkspaceNotLoaded());
 
-        var targetProject = ResolveProject(solution, project);
-        if (targetProject is null)
-            // User-input error (unknown project name) → invalid_argument per D-06.
+        // design_questions_settled §1: ONE resolution predicate, shared with find_files. The
+        // count rule below is compile_check's own disposition -- it needs exactly one instance,
+        // never a filter over several.
+        var instances = ProjectResolution.Resolve(solution, projectSpec, tfm);
+        if (instances.Count == 0)
+        {
+            // §5: distinguish "the assembly itself doesn't exist" (blame project) from "the
+            // assembly exists but not with this tfm" (blame tfm).
+            var assemblyExists = ProjectResolution.Resolve(solution, projectSpec, tfm: null).Count > 0;
+            if (assemblyExists)
+            {
+                var tfms = ProjectResolution.Resolve(solution, projectSpec, tfm: null)
+                    .Select(ProjectResolution.TargetFrameworkOf)
+                    .Where(t => t is not null)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(t => t, StringComparer.Ordinal);
+                return Envelope<CompileCheckToolData>.Err(
+                    ToolError.InvalidArgument("tfm", "not_found", value: tfm,
+                        message: $"project '{projectSpec}' has no loaded instance targeting tfm '{tfm}'. " +
+                                  $"It targets: {string.Join(", ", tfms)}."));
+            }
+
+            // §6: distinct AssemblyName values, Ordinal-sorted, never a flavored Project.Name --
+            // plus a pointer to where a legal value comes from.
+            var assemblyNames = solution.Projects.Select(p => p.AssemblyName)
+                .Distinct(StringComparer.Ordinal).OrderBy(n => n, StringComparer.Ordinal);
             return Envelope<CompileCheckToolData>.Err(
                 ToolError.InvalidArgument("project", "not_found", value: project,
-                    message: $"project '{project}' not found. Valid projects: {string.Join(", ", solution.Projects.Select(p => p.Name))}"));
+                    message: $"project '{projectSpec}' not found. Valid projects: {string.Join(", ", assemblyNames)}. " +
+                              "Call workspace_open and read data.projects[].assembly_name."));
+        }
+
+        if (instances.Count > 1)
+        {
+            // design_questions_settled §2: refuse rather than pick -- an arbitrary assembly-scoped
+            // pick is the same defect this issue closes, at a smaller scope. `ambiguous` blames
+            // `project`, never `tfm`: a shared explicit <AssemblyName> across two csprojs is NOT
+            // fixable with tfm, so a tfm-blaming reason would mis-advise that caller.
+            var describe = instances
+                .Select(p => $"{p.Name} (target_framework={ProjectResolution.TargetFrameworkOf(p) ?? "unknown"}, file_path={p.FilePath})");
+            var tfmHint = instances.Select(ProjectResolution.TargetFrameworkOf).Distinct().Count() > 1
+                ? " Pass tfm to disambiguate."
+                : "";
+            return Envelope<CompileCheckToolData>.Err(
+                ToolError.InvalidArgument("project", "ambiguous", value: project,
+                    message: $"project '{projectSpec}' matches more than one loaded instance: " +
+                              $"{string.Join("; ", describe)}.{tfmHint}"));
+        }
+
+        var targetProject = instances[0];
 
         logger.LogDebug("compile_check: snippet length={Length}, project={Project}, timeoutMs={TimeoutMs}",
             snippetText.Length, targetProject.Name, timeoutMs);
@@ -213,19 +269,5 @@ public sealed class CompileCheckTool
             logger.LogError(ex, "Roslyn exception during compile_check");
             return Envelope<CompileCheckToolData>.Err(ToolError.Internal(ex));
         }
-    }
-
-    /// <summary>
-    /// Resolve project by name or path suffix. Default: first project in solution.
-    /// Order: exact Name, FilePath suffix, case-insensitive Name.
-    /// </summary>
-    private static Project? ResolveProject(Solution solution, string? projectSpec)
-    {
-        if (string.IsNullOrEmpty(projectSpec))
-            return solution.Projects.FirstOrDefault();
-
-        return solution.Projects.FirstOrDefault(p => p.Name == projectSpec)
-            ?? solution.Projects.FirstOrDefault(p => p.FilePath != null && p.FilePath.EndsWith(projectSpec, StringComparison.Ordinal))
-            ?? solution.Projects.FirstOrDefault(p => string.Equals(p.Name, projectSpec, StringComparison.OrdinalIgnoreCase));
     }
 }

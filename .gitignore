@@ -9,6 +9,10 @@
 # Claude Code local agent worktrees (full source copies; per-host)
 .claude/worktrees/
 
+# Claude Code per-host local settings (permissions, worktree.baseRef, env overrides).
+# Machine-specific by design — .claude/settings.json is the shared, checked-in one.
+.claude/settings.local.json
+
 # User-specific files
 *.rsuser
 *.suo

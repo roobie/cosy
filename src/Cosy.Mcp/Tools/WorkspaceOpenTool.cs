@@ -13,6 +13,14 @@ namespace Cosy.Mcp.Tools;
 public sealed record WorkspaceOpenToolData(
     [property: JsonPropertyName("project_count")]  int ProjectCount,
     [property: JsonPropertyName("document_count")] int DocumentCount,
+    // 1FH-01/1FH-02: one row per loaded Roslyn project instance -- the discovery route for a
+    // legal `project` value on compile_check/find_files/run_tests. This array is ALWAYS
+    // complete (design_decisions §2 of quick task 260918-1fh): workspace_open stays
+    // expectList:false and takes no `max`, and a caller detects completeness for free via
+    // projects.length == project_count rather than via envelope truncated/total_count -- a
+    // truncated discovery list would be worse than no discovery list, since the caller could
+    // not tell "my project is not loaded" from "my project was cut".
+    [property: JsonPropertyName("projects")]       IReadOnlyList<WorkspaceOpenProject> Projects,
     [property: JsonPropertyName("diagnostics")]    IReadOnlyList<WorkspaceOpenDiagnostic> Diagnostics,
     [property: JsonPropertyName("resolved_tfm")]   string? ResolvedTfm,
     [property: JsonPropertyName("msbuild")]        WorkspaceOpenMsBuild? MsBuild,
@@ -25,6 +33,21 @@ public sealed record WorkspaceOpenToolData(
 public sealed record WorkspaceOpenDiagnostic(
     [property: JsonPropertyName("kind")]    string Kind,
     [property: JsonPropertyName("message")] string Message);
+
+/// <summary>One loaded Roslyn project instance (1FH-01/1FH-02). file_path and
+/// target_framework carry JsonIgnore(Never) -- without it the MCP SDK's serializer-wide
+/// WhenWritingNull default would drop the key when the value is null, and an omitted key is
+/// indistinguishable from an older server that lacks the field entirely. Precedent:
+/// ReadSourceToolData.ReadSnapshotId (ReadSourceTool.cs) carries the same override for the
+/// same reason; FindTextToolData.SearchedSnapshotId (FindTextTool.cs) has NO override and is
+/// dropped from the wire when null -- do not copy that shape here.</summary>
+public sealed record WorkspaceOpenProject(
+    [property: JsonPropertyName("name")]             string Name,
+    [property: JsonPropertyName("assembly_name")]    string AssemblyName,
+    [property: JsonPropertyName("file_path"), JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    string? FilePath,
+    [property: JsonPropertyName("target_framework"), JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    string? TargetFramework);
 
 /// <summary>Which MSBuild the host resolved. Cosy evaluates projects with the SDK
 /// installed on the machine, not one it ships — echoing this turns "why won't my
@@ -48,7 +71,11 @@ public sealed class WorkspaceOpenTool
         "load metadata (project count, document count, elapsed ms, WorkspaceFailed diagnostics, " +
         "and resolved TFM for .csproj loads). Path must be absolute; relative paths are rejected " +
         "(see server_cwd in the response, or the error, for why). One workspace at a time: a " +
-        "different-path re-open is rejected with a hint to call workspace_close first.")]
+        "different-path re-open is rejected with a hint to call workspace_close first. " +
+        "The response also lists every loaded project under data.projects with its name, assembly_name, " +
+        "file_path and target_framework -- one row per project instance, so a multi-targeted project " +
+        "appears once per framework with the same assembly_name and file_path. Pass assembly_name as " +
+        "find_files' project, assembly_name as compile_check's project, and file_path as run_tests' projectPath.")]
     // Return type is object to sidestep MCP SDK generic-serialization friction; the runtime
     // instance is always Envelope<WorkspaceOpenToolData> and serializes correctly via STJ.
     public async Task<object> OpenAsync(
@@ -119,6 +146,9 @@ public sealed class WorkspaceOpenTool
             var data = new WorkspaceOpenToolData(
                 ProjectCount: result.ProjectCount,
                 DocumentCount: result.DocumentCount,
+                Projects: result.Projects
+                    .Select(p => new WorkspaceOpenProject(p.Name, p.AssemblyName, p.FilePath, p.TargetFramework))
+                    .ToArray(),
                 Diagnostics: result.Diagnostics
                     .Select(d => new WorkspaceOpenDiagnostic(d.Kind, d.Message))
                     .ToArray(),

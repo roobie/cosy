@@ -43,8 +43,18 @@ public record EditRequest(
 
 // Data payload for apply_edits_verified — lives under envelope.data (ADR-0004 §1).
 // Diagnostics now carry span: {start, end} adjacent to line/column per D-05.
+// applied_on_snapshot_id echoes the base these edits were actually staged against (ADR-0007
+// §1.2 amendment, 2026-09-17): the fromSnapshotId parameter verbatim, or explicit JSON null
+// when CurrentSolution answered. JsonIgnore(Never) is mandatory, not decorative — the SDK-wide
+// WhenWritingNull default would otherwise OMIT this key when null, and an omitted key is
+// indistinguishable from a server too old to carry the field. "I did not chain" is exactly the
+// case this field exists to report; see ReadSourceToolData.ReadSnapshotId (ReadSourceTool.cs,
+// Phase 12 D-08) for the precedent this follows, and FindTextToolData.SearchedSnapshotId
+// (FindTextTool.cs:24) for the omit-when-null shape this deliberately does NOT follow.
 public sealed record ApplyEditsVerifiedToolData(
     [property: JsonPropertyName("snapshot_id")]   string SnapshotId,
+    [property: JsonPropertyName("applied_on_snapshot_id"), JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    string? AppliedOnSnapshotId,
     [property: JsonPropertyName("files_touched")] int FilesTouched,
     [property: JsonPropertyName("edits_applied")] int EditsApplied,
     [property: JsonPropertyName("edits")]         IReadOnlyList<ApplyEditsEcho> Edits,
@@ -106,7 +116,7 @@ public sealed class ApplyEditsVerifiedTool
         // Wire name is camelCase ("fromSnapshotId") to match existing tool input conventions —
         // the MCP SDK uses ParameterInfo.Name directly; ADR-0004 §2 snake_case applies to
         // response keys (via [JsonPropertyName]), not request parameters.
-        [Description("Optional snapshot id to apply edits on top of (chains a new snapshot off the given one — ADR-0007 §1.2). Defaults to CurrentSolution when absent.")] string? fromSnapshotId = null,
+        [Description("Optional snapshot id to apply edits on top of (chains a new snapshot off the given one — ADR-0007 §1.2). Absent means CurrentSolution, which is NOT the snapshot your previous call returned: apply_edits_verified never promotes, so two consecutive calls that both omit this both stage off the same base and the later snapshot does not contain the earlier one's edits — committing the later one writes only its own files. Pass the previous call's snapshot_id to chain; the response echoes the base actually used as data.applied_on_snapshot_id.")] string? fromSnapshotId = null,
         CancellationToken ct = default)
     {
         // --- ARGUMENT VALIDATION (no workspace access required) ---
@@ -437,6 +447,7 @@ public sealed class ApplyEditsVerifiedTool
 
             var data = new ApplyEditsVerifiedToolData(
                 SnapshotId: snapshotId,
+                AppliedOnSnapshotId: fromSnapshotId,
                 FilesTouched: distinctFiles.Length,
                 EditsApplied: edits.Length,
                 Edits: editEchoes,

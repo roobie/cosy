@@ -42,16 +42,26 @@ public sealed record ToolArgumentSchema(
     /// -- or a parameter that loses its default -- from silently acquiring a null-as-absent rule
     /// it was never marked for. The case that forced it was compile_check's <c>project</c>, which
     /// was still schema-required when this guard landed in Plan 01 and was swept to
-    /// <c>string? project = null</c> in Plan 02; it is deliberately NOT [CosyRequired] either way,
-    /// because its handler resolves a null project to the default.
+    /// <c>string? project = null</c> in Plan 02, at which point it was deliberately NOT
+    /// [CosyRequired], because its handler resolved a null project to the default.
     /// <see cref="FirstMissing"/> treats an explicit JSON null as absent ONLY for names in this
     /// set. Measured live, full-suite run (2026-09-10): applying null-as-absent to the whole of
     /// <see cref="Required"/> broke 8 of 9 CompileCheckTests and others, because every one of them
-    /// legitimately sends <c>project: null</c> to mean "use the default project" -- a call that
-    /// worked before Task 2 (FirstMissing tested key presence only) and must keep working for
-    /// every tool this plan does not touch. Empty by default, so a tool with no CosyRequired
-    /// parameters (i.e. every tool except apply_edits_verified, in this plan) is completely
-    /// unaffected by the null-as-absent rule -- the exact pre-existing behavior is preserved.
+    /// legitimately sent <c>project: null</c> to mean "use the default project" -- a call that
+    /// worked before Task 2 (FirstMissing tested key presence only) and had to keep working for
+    /// every tool this plan did not touch.
+    ///
+    /// Dated note (quick task 260918-2qp / issue #15, D-2/D-3, 2026-09-18):
+    /// compile_check.project is now [CosyRequired] -- the "handler resolves a null project to
+    /// the default" reasoning above no longer holds; the arbitrary
+    /// <c>solution.Projects.FirstOrDefault()</c> pick it described is exactly what D-2 removes.
+    /// The 2026-09-10 measurement above stands as evidence of WHY the null-as-absent rule had to
+    /// stay scoped rather than universal, and this task deliberately walked back into that same
+    /// breakage on this one tool, on purpose, with every caller repaired (see call_site_inventory
+    /// in 260918-2qp-PLAN.md). apply_edits_verified.verify remains the surviving example of a
+    /// parameter deliberately defaulted-but-unmarked. Empty by default, so a tool with no
+    /// CosyRequired parameters is completely unaffected by the null-as-absent rule -- the exact
+    /// pre-existing behavior is preserved.
     /// </summary>
     public IReadOnlyList<string> SemanticallyRequired { get; init; } = Array.Empty<string>();
 

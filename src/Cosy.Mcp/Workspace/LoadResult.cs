@@ -7,6 +7,14 @@ public sealed record LoadResult
 {
     public int ProjectCount { get; init; }
     public int DocumentCount { get; init; }
+
+    /// <summary>One row per loaded Roslyn <c>Project</c> instance (1FH-01). Populated by
+    /// WorkspaceHost.BuildProjectList on BOTH the cold-load path and the same-path
+    /// short-circuit — a second, separate population site is how the short-circuit would come
+    /// to report an empty list from a healthy workspace. Default initializer keeps
+    /// LoadResult.Error(...) compiling untouched.</summary>
+    public IReadOnlyList<LoadedProject> Projects { get; init; } = Array.Empty<LoadedProject>();
+
     public int ElapsedMs { get; init; }
     public IReadOnlyList<LoadDiagnostic> Diagnostics { get; init; } = Array.Empty<LoadDiagnostic>();
     public string? ResolvedTfm { get; init; }
@@ -24,6 +32,17 @@ public sealed record LoadResult
 
 /// <summary>WorkspaceDiagnostic surfaced verbatim — Kind is "Failure" or "Warning".</summary>
 public sealed record LoadDiagnostic(string Kind, string Message);
+
+/// <summary>Host-layer identity of one loaded Roslyn <c>Project</c> instance (1FH-01/1FH-02).
+/// No JSON attributes here — the wire projection is WorkspaceOpenProject
+/// (WorkspaceOpenTool.cs), kept separate exactly as LoadDiagnostic/WorkspaceOpenDiagnostic are.
+/// FilePath and TargetFramework are nullable in Roslyn; emitted as explicit null when absent
+/// or underivable, never omitted from the wire.</summary>
+public sealed record LoadedProject(
+    string Name,
+    string AssemblyName,
+    string? FilePath,
+    string? TargetFramework);
 
 /// <summary>Result of <see cref="IWorkspaceHost.CloseAsync"/>. Closed=false is the idempotent
 /// "nothing was loaded" answer — not an error. PriorPath is the absolute path of the workspace
